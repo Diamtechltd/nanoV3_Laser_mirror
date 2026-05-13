@@ -1,12 +1,14 @@
 Arduino D4 -> TMC2209 EN
 Arduino D5 -> TMC2209 STEP
 Arduino D6 -> TMC2209 DIR
-Arduino D8 -> TMC2209 PDN_UART 
-Arduino D9 -> 1k resistor -> TMC2209 PDN_UART 
+Arduino D8 -> 1k resistor -> TMC2209 PDN_UART
 Arduino 5V -> TMC2209 VCC_IO
 Arduino GND -> TMC2209 GND
 Motor supply VM -> TMC2209 VM
 Motor supply GND -> TMC2209 GND
+TMC2209 MS1 -> GND
+TMC2209 MS2 -> GND
+MS1/MS2 both GND selects UART address 0 (matches firmware).
 
 Motor coil A    -> TMC A1 / A2
 Motor coil B    -> TMC B1 / B2

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-#include <SoftwareSerial.h>
 #include <TMCStepper.h>
 
 #include "BoardConfig.h"
@@ -33,7 +32,6 @@ class Tmc2209Driver {
   static uint8_t microstepsToMres(uint16_t microsteps);
   static uint16_t mresToMicrosteps(uint8_t mres);
 
-  SoftwareSerial serial_;
   TMC2209Stepper driver_;
   bool enabled_;
   bool connected_;

@@ -13,8 +13,7 @@ ASSIGNMENT_TO_SYMBOL = {
     "enable_pin": "kEnablePin",
     "step_pin": "kStepPin",
     "dir_pin": "kDirPin",
-    "tmc_uart_rx_pin": "kTmcUartRxPin",
-    "tmc_uart_tx_pin": "kTmcUartTxPin",
+    "tmc_uart_pin": "kTmcUartPin",
 }
 
 

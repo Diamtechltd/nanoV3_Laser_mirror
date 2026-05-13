@@ -1,8 +1,8 @@
 #include "Tmc2209Driver.h"
 
 Tmc2209Driver::Tmc2209Driver()
-    : serial_(board::kTmcUartRxPin, board::kTmcUartTxPin),
-      driver_(&serial_, driver_config::kRSense, driver_config::kDriverAddress),
+    : driver_(board::kTmcUartPin, board::kTmcUartPin, driver_config::kRSense,
+              driver_config::kDriverAddress),
       enabled_(driver_config::kDriverUartEnabled),
       connected_(false) {}
 
@@ -12,10 +12,11 @@ bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
     return false;
   }
 
-  serial_.begin(driver_config::kDriverUartBaud);
-  delay(100);
+  driver_.beginSerial(driver_config::kDriverUartBaud);
+  delay(50);
 
-  driver_.begin();
+  driver_.pdn_disable(true);
+  driver_.mstep_reg_select(true);
   delay(50);
 
   const uint8_t result = driver_.test_connection();

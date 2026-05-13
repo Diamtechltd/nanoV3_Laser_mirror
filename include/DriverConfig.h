@@ -14,6 +14,6 @@ constexpr long kDefaultMoveSteps = 1000;
 
 // Keep UART optional so STEP/DIR motion can be brought up before UART wiring is finalized.
 constexpr bool kDriverUartEnabled = true;
-constexpr unsigned long kDriverUartBaud = 115200UL;
+constexpr unsigned long kDriverUartBaud = 57600UL;
 
 }  // namespace driver_config

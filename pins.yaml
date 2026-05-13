@@ -107,5 +107,4 @@ assignments:
   enable_pin: D4
   step_pin: D5
   dir_pin: D6
-  tmc_uart_rx_pin: D8
-  tmc_uart_tx_pin: D9
+  tmc_uart_pin: D8
