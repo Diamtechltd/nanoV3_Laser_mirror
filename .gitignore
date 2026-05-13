@@ -1,0 +1,18 @@
+# PlatformIO local state and build output
+.pio/
+.pio-core/
+
+# VS Code local/generated files
+.vscode/*
+!.vscode/extensions.json
+
+# C/C++ extension caches
+.browse.c_cpp.db*
+
+# OS noise
+Thumbs.db
+.DS_Store
+
+# Local scratch/reference files
+pins.yaml.old
+URLS

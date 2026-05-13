@@ -1,0 +1,111 @@
+# Arduino Nano compatible USB-C board shown in the picture.
+# GPIO pins present on the pictured headers: D2-D13, RX/TX, A0-A5.
+
+board_pins:
+  D0:
+    arduino_number: 0
+    aliases: [RX]
+    reserved: true
+    notes: Hardware serial RX; shared with USB serial. Use only if serial monitor/programming is not needed.
+  D1:
+    arduino_number: 1
+    aliases: [TX]
+    reserved: true
+    notes: Hardware serial TX; shared with USB serial. Use only if serial monitor/programming is not needed.
+
+  D2:
+    arduino_number: 2
+    reserved: false
+    notes: Digital pin 2; external interrupt capable.
+  D3:
+    arduino_number: 3
+    reserved: false
+    notes: Digital pin 3; PWM; external interrupt capable.
+  D4:
+    arduino_number: 4
+    reserved: false
+    notes: Digital pin 4.
+  D5:
+    arduino_number: 5
+    reserved: false
+    notes: Digital pin 5; PWM.
+  D6:
+    arduino_number: 6
+    reserved: false
+    notes: Digital pin 6; PWM.
+  D7:
+    arduino_number: 7
+    reserved: false
+    notes: Digital pin 7.
+  D8:
+    arduino_number: 8
+    reserved: false
+    notes: Digital pin 8.
+  D9:
+    arduino_number: 9
+    reserved: false
+    notes: Digital pin 9; PWM.
+  D10:
+    arduino_number: 10
+    aliases: [SS]
+    reserved: false
+    notes: Digital pin 10; PWM; SPI SS.
+  D11:
+    arduino_number: 11
+    aliases: [MOSI]
+    reserved: false
+    notes: Digital pin 11; PWM; SPI MOSI.
+  D12:
+    arduino_number: 12
+    aliases: [MISO]
+    reserved: false
+    notes: Digital pin 12; SPI MISO.
+  D13:
+    arduino_number: 13
+    aliases: [SCK, LED_BUILTIN]
+    reserved: false
+    notes: Digital pin 13; SPI SCK; connected to onboard LED, avoid for quiet/precision signals.
+
+  A0:
+    arduino_number: 14
+    reserved: false
+    notes: Analog input A0; also usable as digital pin 14.
+  A1:
+    arduino_number: 15
+    reserved: false
+    notes: Analog input A1; also usable as digital pin 15.
+  A2:
+    arduino_number: 16
+    reserved: false
+    notes: Analog input A2; also usable as digital pin 16.
+  A3:
+    arduino_number: 17
+    reserved: false
+    notes: Analog input A3; also usable as digital pin 17.
+  A4:
+    arduino_number: 18
+    aliases: [SDA]
+    reserved: false
+    notes: Analog input A4; also usable as digital pin 18; I2C SDA.
+  A5:
+    arduino_number: 19
+    aliases: [SCL]
+    reserved: false
+    notes: Analog input A5; also usable as digital pin 19; I2C SCL.
+
+non_gpio_pins:
+  RST:
+    notes: Reset pin; not usable as normal GPIO.
+  5V:
+    notes: Regulated 5 V pin.
+  VIN:
+    notes: Raw input supply pin.
+  GND:
+    notes: Ground pins.
+
+assignments:
+  enable_pin: D4
+  step_pin: D5
+  dir_pin: D6
+  tmc_uart_rx_pin: D8
+  tmc_uart_tx_pin: D9
