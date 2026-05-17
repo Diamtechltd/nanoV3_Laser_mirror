@@ -40,7 +40,7 @@ struct MotionState {
 Tmc2209Driver tmc;
 MotionState motion;
 
-bool autoDisableAfterMove = true;
+bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
 bool homingEnabled = driver_config::kHomingEnabled;
 bool motionReady = true;
 bool tmcOk = false;

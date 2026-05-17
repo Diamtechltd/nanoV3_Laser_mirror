@@ -1,0 +1,17 @@
+tmc2209:
+  uart_enabled: true
+  uart_baud: 57600
+
+motion:
+  default_current_ma: 160
+  default_microsteps: 16
+  default_step_delay_us: 50
+  default_move_steps: 1000
+  auto_disable_after_move: true
+
+homing:
+  enabled: true
+  step_delay_us: 1000
+  retract_steps: 0
+  direction_negative: true
+
