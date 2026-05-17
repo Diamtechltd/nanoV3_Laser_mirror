@@ -13,6 +13,7 @@ ASSIGNMENT_TO_SYMBOL = {
     "enable_pin": "kEnablePin",
     "step_pin": "kStepPin",
     "dir_pin": "kDirPin",
+    "endstop_pin": "kEndstopPin",
     "tmc_uart_pin": "kTmcUartPin",
 }
 
@@ -110,6 +111,7 @@ def normalize_board_pins(data):
         arduino_number = meta.get("arduino_number")
         reserved = meta.get("reserved", False)
         aliases = meta.get("aliases", [])
+        assignable_roles = meta.get("assignable_roles", [])
 
         if not isinstance(arduino_number, int):
             fail(f"board_pins.{label}.arduino_number must be an integer")
@@ -117,11 +119,14 @@ def normalize_board_pins(data):
             fail(f"board_pins.{label}.reserved must be true or false")
         if not isinstance(aliases, list):
             fail(f"board_pins.{label}.aliases must be a list when present")
+        if not isinstance(assignable_roles, list):
+            fail(f"board_pins.{label}.assignable_roles must be a list when present")
 
         normalized[label] = {
             "arduino_number": arduino_number,
             "reserved": reserved,
             "aliases": aliases,
+            "assignable_roles": assignable_roles,
         }
 
     return normalized
@@ -144,7 +149,7 @@ def resolve_assignments(data, board_pins):
             fail(f"assignments.{assignment_name} must be a pin label like D4 or A0")
         if label not in board_pins:
             fail(f"assignments.{assignment_name} references unknown pin label {label}")
-        if board_pins[label]["reserved"]:
+        if board_pins[label]["reserved"] and assignment_name not in board_pins[label]["assignable_roles"]:
             fail(f"assignments.{assignment_name} uses reserved pin {label}")
         if label in used_labels:
             fail(

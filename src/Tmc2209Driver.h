@@ -8,6 +8,13 @@
 
 class Tmc2209Driver {
  public:
+  enum class MicrostepStatus : uint8_t {
+    kOk = 0,
+    kInvalidMicrostepValue,
+    kUnavailable,
+    kWriteFailed,
+  };
+
   Tmc2209Driver();
 
   bool begin(uint16_t runCurrentMa, uint16_t microsteps);
@@ -15,7 +22,8 @@ class Tmc2209Driver {
   bool isConnected() const;
 
   bool setRunCurrent(uint16_t runCurrentMa);
-  bool setMicrosteps(uint16_t microsteps);
+  MicrostepStatus setMicrosteps(uint16_t microsteps);
+  MicrostepStatus lastMicrostepStatus() const;
 
   uint16_t getRealMicrosteps();
   uint8_t testConnection();
@@ -35,5 +43,6 @@ class Tmc2209Driver {
   TMC2209Stepper driver_;
   bool enabled_;
   bool connected_;
+  MicrostepStatus lastMicrostepStatus_;
 };
 

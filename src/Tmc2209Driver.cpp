@@ -4,11 +4,13 @@ Tmc2209Driver::Tmc2209Driver()
     : driver_(board::kTmcUartPin, board::kTmcUartPin, driver_config::kRSense,
               driver_config::kDriverAddress),
       enabled_(driver_config::kDriverUartEnabled),
-      connected_(false) {}
+      connected_(false),
+      lastMicrostepStatus_(MicrostepStatus::kUnavailable) {}
 
 bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
   if (!enabled_) {
     connected_ = false;
+    lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
     return false;
   }
 
@@ -23,6 +25,7 @@ bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
   connected_ = (result == 0);
 
   if (!connected_) {
+    lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
     return false;
   }
 
@@ -37,7 +40,8 @@ bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
   driver_.iholddelay(1);
   driver_.TPOWERDOWN(2);
 
-  return setMicrosteps(microsteps);
+  lastMicrostepStatus_ = setMicrosteps(microsteps);
+  return lastMicrostepStatus_ == MicrostepStatus::kOk;
 }
 
 bool Tmc2209Driver::isEnabled() const { return enabled_; }
@@ -53,14 +57,17 @@ bool Tmc2209Driver::setRunCurrent(uint16_t runCurrentMa) {
   return true;
 }
 
-bool Tmc2209Driver::setMicrosteps(uint16_t microsteps) {
-  if (!connected_) {
-    return false;
-  }
-
+Tmc2209Driver::MicrostepStatus Tmc2209Driver::setMicrosteps(
+    uint16_t microsteps) {
   const uint8_t mres = microstepsToMres(microsteps);
   if (mres == 255) {
-    return false;
+    lastMicrostepStatus_ = MicrostepStatus::kInvalidMicrostepValue;
+    return lastMicrostepStatus_;
+  }
+
+  if (!connected_) {
+    lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
+    return lastMicrostepStatus_;
   }
 
   driver_.mstep_reg_select(true);
@@ -74,7 +81,14 @@ bool Tmc2209Driver::setMicrosteps(uint16_t microsteps) {
   driver_.CHOPCONF(chop);
   delay(10);
 
-  return true;
+  lastMicrostepStatus_ = getRealMicrosteps() == microsteps
+                             ? MicrostepStatus::kOk
+                             : MicrostepStatus::kWriteFailed;
+  return lastMicrostepStatus_;
+}
+
+Tmc2209Driver::MicrostepStatus Tmc2209Driver::lastMicrostepStatus() const {
+  return lastMicrostepStatus_;
 }
 
 uint16_t Tmc2209Driver::getRealMicrosteps() {

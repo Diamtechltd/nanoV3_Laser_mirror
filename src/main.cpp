@@ -6,15 +6,74 @@
 
 namespace {
 
+enum class MotionAbortReason : uint8_t {
+  kNone = 0,
+  kTimeout,
+  kManualStop,
+  kEndstopTriggered,
+};
+
+enum class MotionMode : uint8_t {
+  kNormal = 0,
+  kHomingSeek,
+  kHomingRetract,
+};
+
+struct MotionState {
+  bool active = false;
+  bool stepPinHigh = false;
+  bool logicalForward = true;
+  bool physicalDir = true;
+  bool checkedFirstStep = false;
+  bool bounded = true;
+  unsigned long totalSteps = 0;
+  unsigned long completedSteps = 0;
+  unsigned long startMs = 0;
+  unsigned long nextStatusMs = 0;
+  unsigned long nextEdgeUs = 0;
+  uint16_t mscntBefore = 0;
+  uint32_t stepDelayUs = 0;
+  unsigned long plannedRetractSteps = 0;
+  MotionMode mode = MotionMode::kNormal;
+};
+
 Tmc2209Driver tmc;
+MotionState motion;
 
 bool autoDisableAfterMove = true;
+bool homingEnabled = driver_config::kHomingEnabled;
 bool motionReady = true;
 bool tmcOk = false;
 
 uint32_t stepDelayUs = driver_config::kDefaultStepDelayUs;
 uint16_t runCurrentMa = driver_config::kDefaultCurrentMa;
 uint16_t currentMicrosteps = driver_config::kDefaultMicrosteps;
+MotionAbortReason lastMotionAbort = MotionAbortReason::kNone;
+
+bool hasReachedMillis(unsigned long now, unsigned long target) {
+  return static_cast<long>(now - target) >= 0;
+}
+
+bool hasReachedMicros(unsigned long now, unsigned long target) {
+  return static_cast<long>(now - target) >= 0;
+}
+
+bool isEndstopTriggered() {
+  const int level = digitalRead(board::kEndstopPin);
+  return board::kEndstopActiveHigh ? level == HIGH : level == LOW;
+}
+
+bool motionDrivesIntoMinimumEndstop(MotionMode mode, bool logicalForward) {
+  switch (mode) {
+    case MotionMode::kNormal:
+    case MotionMode::kHomingSeek:
+      return !logicalForward;
+    case MotionMode::kHomingRetract:
+      return false;
+  }
+
+  return false;
+}
 
 void enableDriver() {
   digitalWrite(board::kEnablePin, board::kEnableActiveLow ? LOW : HIGH);
@@ -27,6 +86,39 @@ void disableDriver() {
 }
 
 void printDivider() { Serial.println(F("----------------------------------------")); }
+
+void resetMotionState() { motion = MotionState{}; }
+
+const __FlashStringHelper* motionAbortReasonText(MotionAbortReason reason) {
+  switch (reason) {
+    case MotionAbortReason::kNone:
+      return F("none");
+    case MotionAbortReason::kTimeout:
+      return F("timeout");
+    case MotionAbortReason::kManualStop:
+      return F("manual stop");
+    case MotionAbortReason::kEndstopTriggered:
+      return F("endstop");
+  }
+
+  return F("unknown");
+}
+
+const __FlashStringHelper* microstepStatusText(
+    Tmc2209Driver::MicrostepStatus status) {
+  switch (status) {
+    case Tmc2209Driver::MicrostepStatus::kOk:
+      return F("OK");
+    case Tmc2209Driver::MicrostepStatus::kInvalidMicrostepValue:
+      return F("Invalid microstep value.");
+    case Tmc2209Driver::MicrostepStatus::kUnavailable:
+      return F("TMC UART unavailable.");
+    case Tmc2209Driver::MicrostepStatus::kWriteFailed:
+      return F("TMC write verification failed.");
+  }
+
+  return F("Unknown error.");
+}
 
 void printMicrostepRaw() {
   if (!tmcOk) {
@@ -55,33 +147,285 @@ void printMicrostepRaw() {
 }
 
 bool setMicrosteps(uint16_t microsteps) {
-  switch (microsteps) {
-    case 1:
-    case 2:
-    case 4:
-    case 8:
-    case 16:
-    case 32:
-    case 64:
-    case 128:
-    case 256:
-      break;
-    default:
-      Serial.println(F("ERROR: Invalid microstep value."));
-      Serial.println(F("Allowed: 1, 2, 4, 8, 16, 32, 64, 128, 256"));
-      return false;
+  const Tmc2209Driver::MicrostepStatus status = tmc.setMicrosteps(microsteps);
+  if (status == Tmc2209Driver::MicrostepStatus::kInvalidMicrostepValue) {
+    Serial.println(F("ERROR: Invalid microstep value."));
+    Serial.println(F("Allowed: 1, 2, 4, 8, 16, 32, 64, 128, 256"));
+    return false;
   }
 
   currentMicrosteps = microsteps;
 
-  if (tmcOk && !tmc.setMicrosteps(microsteps)) {
-    Serial.println(F("ERROR: Failed to push microstep setting over UART."));
+  if (status == Tmc2209Driver::MicrostepStatus::kOk) {
+    Serial.print(F("Microsteps set to: "));
+    Serial.println(currentMicrosteps);
+    tmcOk = tmc.isConnected();
+    return true;
+  }
+
+  Serial.print(F("WARNING: "));
+  Serial.println(microstepStatusText(status));
+  Serial.println(F("Microstep setting saved locally but not applied to the driver."));
+  tmcOk = tmc.isConnected();
+  return false;
+}
+
+void printMotionProgress() {
+  Serial.print(F("Motion progress: "));
+  Serial.print(motion.completedSteps);
+  if (motion.bounded) {
+    Serial.print(F("/"));
+    Serial.print(motion.totalSteps);
+  }
+  Serial.println(F(" steps"));
+}
+
+void finishMove(bool aborted, MotionAbortReason reason) {
+  if (!motion.active && !motion.stepPinHigh) {
+    lastMotionAbort = aborted ? reason : MotionAbortReason::kNone;
+    return;
+  }
+
+  const MotionMode finishedMode = motion.mode;
+  digitalWrite(board::kStepPin, LOW);
+
+  if (aborted) {
+    lastMotionAbort = reason;
+    Serial.print(F("ERROR: Move aborted ("));
+    Serial.print(motionAbortReasonText(reason));
+    Serial.println(F(")."));
+  } else {
+    lastMotionAbort = MotionAbortReason::kNone;
+    Serial.println(finishedMode == MotionMode::kHomingRetract ? F("Homing complete.")
+                                                              : F("Move done."));
+  }
+
+  resetMotionState();
+
+  const bool shouldDisable =
+      finishedMode == MotionMode::kNormal ? (autoDisableAfterMove || aborted)
+                                          : true;
+  if (shouldDisable) {
+    if (!aborted && finishedMode == MotionMode::kNormal) {
+      delay(100);
+    }
+
+    disableDriver();
+    Serial.println(finishedMode == MotionMode::kNormal
+                       ? F("Driver disabled after move.")
+                       : F("Driver disabled after homing."));
+  }
+
+  if (!aborted && finishedMode == MotionMode::kHomingRetract &&
+      isEndstopTriggered()) {
+    Serial.println(F("WARNING: Endstop still active after retract."));
+  }
+
+  Serial.println();
+}
+
+bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
+                 uint32_t requestedStepDelayUs, MotionMode mode,
+                 bool allowTriggeredStart) {
+  if (!motionReady) {
+    Serial.println(F("Refusing move: motion baseline not ready."));
     return false;
   }
 
-  Serial.print(F("Microsteps set to: "));
-  Serial.println(currentMicrosteps);
+  if (motion.active) {
+    Serial.println(F("Refusing move: another move is already in progress."));
+    return false;
+  }
+
+  if (!allowTriggeredStart && isEndstopTriggered() &&
+      motionDrivesIntoMinimumEndstop(mode, logicalForward)) {
+    lastMotionAbort = MotionAbortReason::kEndstopTriggered;
+    Serial.println(F("Refusing move: endstop input is active for this direction."));
+    return false;
+  }
+
+  motion = MotionState{};
+  motion.active = true;
+  motion.logicalForward = logicalForward;
+  motion.physicalDir =
+      board::kInvertDirection ? !motion.logicalForward : motion.logicalForward;
+  motion.bounded = bounded;
+  motion.totalSteps = totalSteps;
+  motion.startMs = millis();
+  motion.nextStatusMs =
+      motion.startMs + driver_config::kMotionStatusIntervalMs;
+  motion.stepDelayUs = requestedStepDelayUs;
+  motion.mode = mode;
+
+  digitalWrite(board::kDirPin, motion.physicalDir ? HIGH : LOW);
+  enableDriver();
+
+  motion.nextEdgeUs = micros() + driver_config::kDirectionSetupDelayUs;
+  lastMotionAbort = MotionAbortReason::kNone;
   return true;
+}
+
+void startMove(long steps) {
+  if (steps == 0) {
+    Serial.println(F("Move ignored: 0 steps."));
+    return;
+  }
+
+  const bool logicalForward = steps > 0;
+  const unsigned long stepCount = static_cast<unsigned long>(labs(steps));
+  if (!beginMotion(logicalForward, stepCount, true, stepDelayUs,
+                   MotionMode::kNormal, false)) {
+    return;
+  }
+
+  Serial.println();
+  Serial.print(F("Move "));
+  Serial.print(motion.logicalForward ? F("forward ") : F("backward "));
+  Serial.print(motion.totalSteps);
+  Serial.println(F(" steps"));
+
+  if (tmcOk) {
+    motion.mscntBefore = tmc.microstepCounter();
+    Serial.print(F("MSCNT before: "));
+    Serial.println(motion.mscntBefore);
+  } else {
+    Serial.println(F("UART offline: running STEP/DIR only."));
+  }
+}
+
+void finishHomingWithoutRetract() {
+  Serial.println(F("Endstop triggered."));
+  Serial.println(F("No homing retract requested."));
+  disableDriver();
+  Serial.println(F("Homing complete."));
+  Serial.println(F("Driver disabled after homing."));
+  lastMotionAbort = MotionAbortReason::kNone;
+  Serial.println();
+}
+
+void startHomingRetract(unsigned long retractSteps) {
+  if (retractSteps == 0) {
+    finishHomingWithoutRetract();
+    return;
+  }
+
+  const bool retractForward = driver_config::kHomingDirectionNegative;
+  if (!beginMotion(retractForward, retractSteps, true,
+                   driver_config::kHomingStepDelayUs,
+                   MotionMode::kHomingRetract, true)) {
+    return;
+  }
+
+  Serial.print(F("Endstop triggered. Retracting "));
+  Serial.print(retractSteps);
+  Serial.println(F(" steps away from endstop."));
+}
+
+void handleHomingTrigger() {
+  const unsigned long retractSteps = motion.plannedRetractSteps;
+
+  digitalWrite(board::kStepPin, LOW);
+  resetMotionState();
+  startHomingRetract(retractSteps);
+}
+
+void homeAperture(unsigned long retractSteps) {
+  if (!homingEnabled) {
+    Serial.println(F("Homing is disabled. Toggle it with E first."));
+    return;
+  }
+
+  if (isEndstopTriggered()) {
+    lastMotionAbort = MotionAbortReason::kEndstopTriggered;
+    Serial.println(F("Refusing homing: endstop input is already active."));
+    return;
+  }
+
+  const bool homingForward = !driver_config::kHomingDirectionNegative;
+  if (!beginMotion(homingForward, 0, false, driver_config::kHomingStepDelayUs,
+                   MotionMode::kHomingSeek, false)) {
+    return;
+  }
+
+  motion.plannedRetractSteps = retractSteps;
+
+  Serial.println();
+  Serial.print(F("Homing "));
+  Serial.print(homingForward ? F("forward") : F("backward"));
+  Serial.print(F(" at "));
+  Serial.print(driver_config::kHomingStepDelayUs);
+  Serial.println(F(" us per edge."));
+}
+
+void serviceMotion() {
+  if (!motion.active) {
+    return;
+  }
+
+  if (isEndstopTriggered() &&
+      motionDrivesIntoMinimumEndstop(motion.mode, motion.logicalForward)) {
+    if (motion.mode == MotionMode::kHomingSeek) {
+      handleHomingTrigger();
+    } else {
+      finishMove(true, MotionAbortReason::kEndstopTriggered);
+    }
+    return;
+  }
+
+  const unsigned long nowMs = millis();
+  if (hasReachedMillis(nowMs,
+                       motion.startMs + driver_config::kMaxMoveDurationMs)) {
+    finishMove(true, MotionAbortReason::kTimeout);
+    return;
+  }
+
+  if (driver_config::kMotionStatusIntervalMs > 0 &&
+      hasReachedMillis(nowMs, motion.nextStatusMs)) {
+    printMotionProgress();
+    motion.nextStatusMs += driver_config::kMotionStatusIntervalMs;
+  }
+
+  const unsigned long nowUs = micros();
+  if (!hasReachedMicros(nowUs, motion.nextEdgeUs)) {
+    yield();
+    return;
+  }
+
+  // Cooperative edge scheduling keeps loop() responsive without moving to a
+  // timer ISR yet, so later timer-based migration stays isolated.
+  if (!motion.stepPinHigh) {
+    digitalWrite(board::kStepPin, HIGH);
+    motion.stepPinHigh = true;
+    motion.nextEdgeUs = nowUs + motion.stepDelayUs;
+    yield();
+    return;
+  }
+
+  digitalWrite(board::kStepPin, LOW);
+  motion.stepPinHigh = false;
+  ++motion.completedSteps;
+
+  if (tmcOk && !motion.checkedFirstStep) {
+    const uint16_t mscntAfterOne = tmc.microstepCounter();
+    Serial.print(F("MSCNT after 1 step: "));
+    Serial.println(mscntAfterOne);
+
+    if (mscntAfterOne == motion.mscntBefore) {
+      Serial.println(F("WARNING: MSCNT did not change after first step."));
+    } else {
+      Serial.println(F("OK: TMC saw STEP pulse."));
+    }
+
+    motion.checkedFirstStep = true;
+  }
+
+  if (motion.bounded && motion.completedSteps >= motion.totalSteps) {
+    finishMove(false, MotionAbortReason::kNone);
+    return;
+  }
+
+  motion.nextEdgeUs = nowUs + motion.stepDelayUs;
+  yield();
 }
 
 void printStatus() {
@@ -91,6 +435,35 @@ void printStatus() {
 
   Serial.print(F("  motion ready     : "));
   Serial.println(motionReady ? F("YES") : F("NO"));
+
+  Serial.print(F("  motion state     : "));
+  Serial.println(motion.active ? F("ACTIVE") : F("IDLE"));
+
+  Serial.print(F("  endstop pin      : D"));
+  Serial.println(board::kEndstopPin);
+
+  Serial.print(F("  endstop active   : "));
+  Serial.println(board::kEndstopActiveHigh ? F("HIGH") : F("LOW"));
+
+  Serial.print(F("  endstop state    : "));
+  Serial.println(isEndstopTriggered() ? F("TRIGGERED") : F("IDLE"));
+
+  Serial.print(F("  homing enabled   : "));
+  Serial.println(homingEnabled ? F("ON") : F("OFF"));
+
+  if (motion.active) {
+    Serial.print(F("  move progress    : "));
+    Serial.print(motion.completedSteps);
+    if (motion.bounded) {
+      Serial.print(F("/"));
+      Serial.println(motion.totalSteps);
+    } else {
+      Serial.println(F(" steps"));
+    }
+  }
+
+  Serial.print(F("  last abort       : "));
+  Serial.println(motionAbortReasonText(lastMotionAbort));
 
   Serial.print(F("  UART enabled     : "));
   Serial.println(tmc.isEnabled() ? F("YES") : F("NO"));
@@ -144,78 +517,6 @@ void printStatus() {
   Serial.println();
 }
 
-void pulseStep() {
-  digitalWrite(board::kStepPin, HIGH);
-  delayMicroseconds(stepDelayUs);
-  digitalWrite(board::kStepPin, LOW);
-  delayMicroseconds(stepDelayUs);
-}
-
-void moveSteps(long steps) {
-  if (!motionReady) {
-    Serial.println(F("Refusing move: motion baseline not ready."));
-    return;
-  }
-
-  if (steps == 0) {
-    Serial.println(F("Move ignored: 0 steps."));
-    return;
-  }
-
-  const bool logicalForward = steps > 0;
-  const unsigned long absSteps = static_cast<unsigned long>(labs(steps));
-  const bool physicalDir =
-      board::kInvertDirection ? !logicalForward : logicalForward;
-
-  digitalWrite(board::kDirPin, physicalDir ? HIGH : LOW);
-  delayMicroseconds(200);
-
-  enableDriver();
-
-  Serial.println();
-  Serial.print(F("Move "));
-  Serial.print(logicalForward ? F("forward ") : F("backward "));
-  Serial.print(absSteps);
-  Serial.println(F(" steps"));
-
-  uint16_t mscntBefore = 0;
-  if (tmcOk) {
-    mscntBefore = tmc.microstepCounter();
-    Serial.print(F("MSCNT before: "));
-    Serial.println(mscntBefore);
-  } else {
-    Serial.println(F("UART offline: running STEP/DIR only."));
-  }
-
-  pulseStep();
-
-  if (tmcOk) {
-    const uint16_t mscntAfterOne = tmc.microstepCounter();
-    Serial.print(F("MSCNT after 1 step: "));
-    Serial.println(mscntAfterOne);
-
-    if (mscntAfterOne == mscntBefore) {
-      Serial.println(F("WARNING: MSCNT did not change after first step."));
-    } else {
-      Serial.println(F("OK: TMC saw STEP pulse."));
-    }
-  }
-
-  for (unsigned long i = 1; i < absSteps; ++i) {
-    pulseStep();
-  }
-
-  Serial.println(F("Move done."));
-
-  if (autoDisableAfterMove) {
-    delay(100);
-    disableDriver();
-    Serial.println(F("Driver disabled after move."));
-  }
-
-  Serial.println();
-}
-
 void printHelp() {
   Serial.println();
   Serial.println(F("Commands:"));
@@ -223,12 +524,16 @@ void printHelp() {
   Serial.println(F("  s              status"));
   Serial.println(F("  e              enable driver"));
   Serial.println(F("  d              disable driver"));
+  Serial.println(F("  D7 LOW         blocks backward motion into minimum"));
   Serial.println(F("  f              move forward default steps"));
   Serial.println(F("  b              move backward default steps"));
   Serial.println(F("  f 2000         move forward 2000 steps"));
   Serial.println(F("  b 2000         move backward 2000 steps"));
   Serial.println(F("  m 1000         move signed steps"));
   Serial.println(F("  m -1000        move signed steps backward"));
+  Serial.println(F("  H              home toward endstop"));
+  Serial.println(F("  H 50           home, then retract 50 steps"));
+  Serial.println(F("  E              toggle homing feature"));
   Serial.println(F("  i 180          set run current to 180 mA RMS"));
   Serial.println(F("  u 4            set microsteps: 1,2,4,8,16,32,64,128,256"));
   Serial.println(F("  v 2000         set step delay in microseconds"));
@@ -262,29 +567,52 @@ void handleCommand(String line) {
       break;
 
     case 'e':
-      enableDriver();
-      Serial.println(F("Driver enabled."));
+      if (motion.active) {
+        Serial.println(F("Driver already enabled for active motion."));
+      } else {
+        enableDriver();
+        Serial.println(F("Driver enabled."));
+      }
       break;
 
     case 'd':
-      disableDriver();
-      Serial.println(F("Driver disabled."));
+      if (motion.active) {
+        finishMove(true, MotionAbortReason::kManualStop);
+      } else {
+        disableDriver();
+        Serial.println(F("Driver disabled."));
+      }
       break;
 
     case 'f':
-      moveSteps(arg.length() ? value : driver_config::kDefaultMoveSteps);
+      startMove(arg.length() ? value : driver_config::kDefaultMoveSteps);
       break;
 
     case 'b':
-      moveSteps(arg.length() ? -value : -driver_config::kDefaultMoveSteps);
+      startMove(arg.length() ? -value : -driver_config::kDefaultMoveSteps);
       break;
 
     case 'm':
       if (arg.length() == 0) {
         Serial.println(F("Usage: m 1000 or m -1000"));
       } else {
-        moveSteps(value);
+        startMove(value);
       }
+      break;
+
+    case 'H':
+      if (arg.length() && value < 0) {
+        Serial.println(F("ERROR: homing retract must be 0 or greater."));
+      } else {
+        homeAperture(arg.length() ? static_cast<unsigned long>(value)
+                                  : driver_config::kHomingRetractSteps);
+      }
+      break;
+
+    case 'E':
+      homingEnabled = !homingEnabled;
+      Serial.print(F("Homing feature: "));
+      Serial.println(homingEnabled ? F("ON") : F("OFF"));
       break;
 
     case 'i':
@@ -349,6 +677,7 @@ void initPins() {
   pinMode(board::kEnablePin, OUTPUT);
   pinMode(board::kStepPin, OUTPUT);
   pinMode(board::kDirPin, OUTPUT);
+  pinMode(board::kEndstopPin, INPUT_PULLUP);
 
   digitalWrite(board::kStepPin, LOW);
   digitalWrite(board::kDirPin, LOW);
@@ -368,8 +697,15 @@ void initTmcLayer() {
   Serial.println(tmc.testConnection());
 
   if (!tmcOk) {
-    Serial.println(F("ERROR: TMC2209 not detected over UART."));
-    Serial.println(F("Check PDN_UART wiring, resistor, ground, and driver address."));
+    if (tmc.isConnected()) {
+      Serial.print(F("ERROR: TMC2209 setup failed: "));
+      Serial.println(microstepStatusText(tmc.lastMicrostepStatus()));
+    } else {
+      Serial.println(F("ERROR: TMC2209 not detected over UART."));
+      Serial.println(
+          F("Check PDN_UART wiring, resistor, ground, and driver address."));
+    }
+
     return;
   }
 
@@ -396,4 +732,7 @@ void setup() {
   printStatus();
 }
 
-void loop() { handleSerial(); }
+void loop() {
+  handleSerial();
+  serviceMotion();
+}

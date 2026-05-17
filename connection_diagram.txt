@@ -1,6 +1,7 @@
 Arduino D4 -> TMC2209 EN
 Arduino D5 -> TMC2209 STEP
 Arduino D6 -> TMC2209 DIR
+Arduino D7 -> Endstop switch -> GND (active LOW, internal pull-up enabled)
 Arduino D8 -> 1k resistor -> TMC2209 PDN_UART
 Arduino 5V -> TMC2209 VCC_IO
 Arduino GND -> TMC2209 GND

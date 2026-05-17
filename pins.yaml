@@ -35,8 +35,9 @@ board_pins:
     notes: Digital pin 6; PWM.
   D7:
     arduino_number: 7
-    reserved: false
-    notes: Digital pin 7.
+    reserved: true
+    assignable_roles: [endstop_pin]
+    notes: Digital pin 7; reserved for the endstop switch input.
   D8:
     arduino_number: 8
     reserved: false
@@ -107,4 +108,5 @@ assignments:
   enable_pin: D4
   step_pin: D5
   dir_pin: D6
+  endstop_pin: D7
   tmc_uart_pin: D8

@@ -19,7 +19,7 @@ if not exist "%PLATFORMIO_CMD%" (
 
 :pio_found
 echo Uploading PlatformIO project to COM3...
-call "%PLATFORMIO_CMD%" run --target upload --upload-port COM3
+call "%PLATFORMIO_CMD%" run --target nobuild --target upload --upload-port COM3
 if errorlevel 1 (
   echo Upload failed.
   exit /b 1
