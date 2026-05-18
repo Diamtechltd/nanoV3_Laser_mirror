@@ -17,12 +17,14 @@ CONFIG_SCHEMA = {
             "type": bool,
         },
         "minimum_position": {
-            "symbol": "kMinimumPositionMm",
-            "type": int,
+            "symbol": "kMinimumPositionMilliMm",
+            "type": "milli_mm",
+            "min": 0,
         },
         "maximum_position": {
-            "symbol": "kMaximumPositionMm",
-            "type": int,
+            "symbol": "kMaximumPositionMilliMm",
+            "type": "milli_mm",
+            "min": 0,
         },
         "maximum_speed": {
             "symbol": "kMaximumSpeedMmPerSec",
@@ -83,15 +85,32 @@ CONFIG_SCHEMA = {
         },
     },
     "stepper_motor": {
-        "steps_per_revolution": {
-            "symbol": "kStepsPerRevolution",
-            "type": int,
+        "steps_per_mm": {
+            "symbol": "kStepsPerMmX1000",
+            "type": "fixed_3dp",
+            "min": 1,
+        },
+        "full_stroke_mm": {
+            "symbol": "kFullStrokeMilliMm",
+            "type": "milli_mm",
             "min": 1,
         },
         "full_stroke_steps_1x": {
             "symbol": "kFullStrokeSteps1x",
             "type": int,
             "min": 1,
+        },
+    },
+    "aperture_iris": {
+        "min_mm": {
+            "symbol": "kApertureIrisMinMilliMm",
+            "type": "milli_mm",
+            "min": 0,
+        },
+        "max_mm": {
+            "symbol": "kApertureIrisMaxMilliMm",
+            "type": "milli_mm",
+            "min": 1000,
         },
     },
 }
@@ -115,7 +134,10 @@ def parse_scalar(value):
     try:
         return int(value)
     except ValueError:
-        return value
+        try:
+            return float(value)
+        except ValueError:
+            return value
 
 
 def parse_simple_yaml(path):
@@ -185,6 +207,30 @@ def validate_scalar(path, value, rules):
             fail(f"{path} must be true or false")
         return
 
+    if expected_type == "fixed_3dp":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            fail(f"{path} must be a number")
+        scaled = round(float(value) * 1000.0)
+        if abs(float(value) * 1000.0 - scaled) > 1e-6:
+            fail(f"{path} must use at most 3 decimal places")
+        if "min" in rules and scaled < rules["min"]:
+            fail(f"{path} must be >= {rules['min'] / 1000.0:.3f}")
+        if "max" in rules and scaled > rules["max"]:
+            fail(f"{path} must be <= {rules['max'] / 1000.0:.3f}")
+        return
+
+    if expected_type == "milli_mm":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            fail(f"{path} must be a number")
+        scaled = round(float(value) * 1000.0)
+        if abs(float(value) * 1000.0 - scaled) > 1e-6:
+            fail(f"{path} must use at most 3 decimal places")
+        if "min" in rules and scaled < rules["min"]:
+            fail(f"{path} must be >= {rules['min'] / 1000.0:.3f}")
+        if "max" in rules and scaled > rules["max"]:
+            fail(f"{path} must be <= {rules['max'] / 1000.0:.3f}")
+        return
+
     if not isinstance(value, int) or isinstance(value, bool):
         fail(f"{path} must be an integer")
 
@@ -213,10 +259,34 @@ def validate_and_resolve(data):
 
             value = section[key]
             validate_scalar(f"{section_name}.{key}", value, rules)
-            resolved[rules["symbol"]] = value
+            if rules["type"] in {"milli_mm", "fixed_3dp"}:
+                resolved[rules["symbol"]] = int(round(float(value) * 1000.0))
+            else:
+                resolved[rules["symbol"]] = value
 
-    if resolved["kMaximumPositionMm"] <= resolved["kMinimumPositionMm"]:
+    if resolved["kMaximumPositionMilliMm"] <= resolved["kMinimumPositionMilliMm"]:
         fail("motion.maximum_position must be greater than motion.minimum_position")
+    if resolved["kApertureIrisMaxMilliMm"] <= resolved["kApertureIrisMinMilliMm"]:
+        fail("aperture_iris.max_mm must be greater than aperture_iris.min_mm")
+    if resolved["kFullStrokeMilliMm"] <= 0:
+        fail("stepper_motor.full_stroke_mm must be greater than 0")
+
+    derived_steps_per_mm_x1000 = int(
+        round(
+            resolved["kFullStrokeSteps1x"] * 1000000.0 /
+            resolved["kFullStrokeMilliMm"]
+        )
+    )
+    resolved["kDerivedStepsPerMmX1000"] = derived_steps_per_mm_x1000
+
+    difference = abs(resolved["kStepsPerMmX1000"] - derived_steps_per_mm_x1000)
+    if difference > 100:
+        print(
+            "WARNING: stepper_motor.steps_per_mm differs from "
+            "full_stroke_steps_1x/full_stroke_mm by more than 0.100 steps/mm. "
+            f"configured={resolved['kStepsPerMmX1000'] / 1000.0:.3f}, "
+            f"derived={derived_steps_per_mm_x1000 / 1000.0:.3f}"
+        )
 
     motor_section = data["stepper_motor"]
     delay_map = motor_section.get("microsteps_delay")
@@ -249,16 +319,24 @@ def cpp_type_and_value(symbol_name, value):
         "kHomingRetractSteps",
         "kHomingDoubleTapDistanceMm",
         "kHomingSecondSeekDelayMultiplier",
-        "kMinimumPositionMm",
-        "kMaximumPositionMm",
         "kMaximumSpeedMmPerSec",
-        "kStepsPerRevolution",
         "kFullStrokeSteps1x",
     }:
         return "uint16_t", str(value)
 
     if symbol_name in {
+        "kMinimumPositionMilliMm",
+        "kMaximumPositionMilliMm",
+        "kApertureIrisMinMilliMm",
+        "kApertureIrisMaxMilliMm",
+        "kFullStrokeMilliMm",
+    }:
+        return "int32_t", str(value)
+
+    if symbol_name in {
         "kDriverUartBaud",
+        "kStepsPerMmX1000",
+        "kDerivedStepsPerMmX1000",
         "kStepDelayUsForMicrosteps1",
         "kStepDelayUsForMicrosteps2",
         "kStepDelayUsForMicrosteps4",

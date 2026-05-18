@@ -7,14 +7,14 @@ The current firmware includes:
 - build-time configuration from `pins.yaml` and `conf.yaml`
 - active-low minimum endstop support on `D7`
 - directional endstop gating so forward escape motion remains allowed at minimum
-- a serial-command motion workflow with optional homing and absolute mm moves
+- a serial-command motion workflow with double-tap homing verification and absolute mm moves
 
 ## Repository layout
 
 - `platformio.ini` defines the PlatformIO environment, dependencies, and pre-build scripts.
 - `pins.yaml` is the editable source of truth for board pin inventory and active assignments.
 - `conf.yaml` is the editable source of truth for motion defaults, homing defaults, and TMC UART toggles.
-- `conf.yaml` also contains stroke calibration, position limits, speed limits, and per-microstep timing defaults.
+- `conf.yaml` also contains stroke calibration, position limits, aperture-iris calibration, speed limits, and per-microstep timing defaults.
 - `connection_diagram.txt` mirrors the active wiring in a quick human-readable format.
 - `scripts/generate_board_pins.py` validates `pins.yaml` and generates `GeneratedBoardPins.h` during build.
 - `scripts/generate_build_config.py` validates `conf.yaml` and generates `GeneratedBuildConfig.h` during build.
@@ -74,10 +74,14 @@ motion:
   minimum_position: 0
   maximum_position: 30
   maximum_speed: 50
-  default_current_ma: 160
+  default_current_ma: 140
   default_microsteps: 4
   default_move_steps: 1000  # baseline distance at 1x microstepping
   auto_disable_after_move: true
+
+aperture_iris:
+  min_mm: 1
+  max_mm: 17
 
 homing:
   retract_steps: 0
@@ -86,7 +90,8 @@ homing:
   second_seek_delay_multiplier: 2
 
 stepper_motor:
-  steps_per_revolution: 200
+  steps_per_mm: 193.333
+  full_stroke_mm: 30
   full_stroke_steps_1x: 5800
   microsteps_delay:
     1: 275
@@ -103,8 +108,9 @@ stepper_motor:
 Section meanings:
 
 - `motion` controls boot defaults for endstop protection, current, microsteps, default move distance baseline, soft travel range in mm, max speed in mm/s, and auto-disable.
+- `aperture_iris` defines the linear user-facing iris opening range mapped onto carriage travel.
 - `homing` controls retract behavior plus the double-tap homing verification pass.
-- `stepper_motor` describes the motor, stroke calibration, and the per-microstep delay table used for normal motion timing.
+- `stepper_motor` describes the motor, measured steps/mm calibration, reference stroke calibration, and the per-microstep delay table used for normal motion timing.
 - `tmc2209` controls whether UART support is enabled and which baud rate is used for `PDN_UART`.
 
 Timing behavior:
@@ -118,10 +124,12 @@ Timing behavior:
 
 Position behavior:
 
-- `stepper_motor.full_stroke_steps_1x` and the configured `minimum_position` / `maximum_position` define the mm conversion
+- `stepper_motor.steps_per_mm` is the source of truth for raw travel conversion
+- `stepper_motor.full_stroke_mm` and `full_stroke_steps_1x` are kept as a derived cross-check reference
 - absolute position is tracked in `0.001 mm` units after homing or after backing into the minimum endstop
-- the minimum endstop is the absolute origin at `0.00 mm`
+- the minimum endstop is the absolute origin at `0.000 mm`
 - `g <mm>` absolute moves are allowed only when the position is known
+- `A <mm>` maps aperture opening mm onto raw carriage travel using the configured linear iris range
 
 ## Endstop and homing behavior
 
@@ -130,7 +138,7 @@ Position behavior:
 - The minimum endstop blocks backward motion into the stop, not forward escape motion away from it.
 - Forward moves remain allowed while the minimum endstop is active so the mechanism can recover.
 - Homing seeks backward toward minimum, stops on trigger, then retracts forward away from the switch.
-- `H` now performs a double-tap cycle: first touch to zero, move forward `2.00 mm`, slower second touch, then optional retract.
+- `H` now performs a double-tap cycle: first touch to zero, move forward `2.000 mm`, slower second touch, then optional retract.
 - After homing, firmware prints the expected and actual second-touch distance in both steps and mm.
 
 ## Serial commands
@@ -147,7 +155,10 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `f 2000` moves forward a specific step count
 - `b 2000` moves backward a specific step count
 - `m <steps>` moves a signed step count
+- `m 1000` means exactly `1000` steps forward at the current microstep mode
+- `m -1000` means exactly `1000` steps backward at the current microstep mode
 - `g <mm>` moves to an absolute position in millimeters from the minimum endstop origin
+- `A <mm>` moves to an absolute aperture opening in millimeters
 - `i <mA>` sets run current
 - `u <microsteps>` sets microsteps
 - `v <delay_us>` sets step delay temporarily
@@ -155,6 +166,14 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `H` homes toward the minimum endstop
 - `H <steps>` homes, verifies, and uses a one-shot retract override
 - `E` toggles endstop protection on or off for normal manual motion
+- status output now includes `speed limit us` and `est max mm/s` for timing visibility
+
+Iris behavior:
+
+- `g <mm>` stays raw carriage travel
+- `A <mm>` is the user-facing aperture-opening command
+- with the current config, `A 1.000` maps to travel `0.000 mm` and `A 17.000` maps to travel `30.000 mm`
+- after a successful `A` move, firmware prints the requested and resulting aperture opening size
 
 ## Pin and config workflow
 

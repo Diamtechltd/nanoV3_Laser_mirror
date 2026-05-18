@@ -8,8 +8,10 @@ namespace driver_config {
 constexpr float kRSense = 0.11f;
 constexpr uint8_t kDriverAddress = 0b00;
 
-constexpr uint16_t kStepsPerRevolution =
-    generated_build_config::kStepsPerRevolution;
+constexpr uint32_t kStepsPerMmX1000 = generated_build_config::kStepsPerMmX1000;
+constexpr uint32_t kDerivedStepsPerMmX1000 =
+    generated_build_config::kDerivedStepsPerMmX1000;
+constexpr int32_t kFullStrokeMilliMm = generated_build_config::kFullStrokeMilliMm;
 constexpr uint16_t kFullStrokeSteps1x = generated_build_config::kFullStrokeSteps1x;
 constexpr uint16_t kDefaultCurrentMa = generated_build_config::kDefaultCurrentMa;
 constexpr uint16_t kDefaultMicrosteps = generated_build_config::kDefaultMicrosteps;
@@ -18,10 +20,16 @@ constexpr uint32_t kDirectionSetupDelayUs = 200;
 constexpr unsigned long kMaxMoveDurationMs = 30000UL;
 constexpr unsigned long kMotionStatusIntervalMs = 0UL;
 constexpr bool kEndstopEnabled = generated_build_config::kEndstopEnabled;
-constexpr uint16_t kMinimumPositionMm = generated_build_config::kMinimumPositionMm;
-constexpr uint16_t kMaximumPositionMm = generated_build_config::kMaximumPositionMm;
+constexpr int32_t kMinimumPositionMilliMm =
+    generated_build_config::kMinimumPositionMilliMm;
+constexpr int32_t kMaximumPositionMilliMm =
+    generated_build_config::kMaximumPositionMilliMm;
 constexpr uint16_t kMaximumSpeedMmPerSec =
     generated_build_config::kMaximumSpeedMmPerSec;
+constexpr int32_t kApertureIrisMinMilliMm =
+    generated_build_config::kApertureIrisMinMilliMm;
+constexpr int32_t kApertureIrisMaxMilliMm =
+    generated_build_config::kApertureIrisMaxMilliMm;
 constexpr bool kAutoDisableAfterMove = generated_build_config::kAutoDisableAfterMove;
 constexpr uint16_t kHomingRetractSteps = generated_build_config::kHomingRetractSteps;
 constexpr bool kHomingDirectionNegative = generated_build_config::kHomingDirectionNegative;
@@ -60,26 +68,48 @@ inline uint32_t normalStepDelayUsFor(uint16_t microsteps) {
 }
 
 inline int32_t minimumPositionMilliMm() {
-  return static_cast<int32_t>(kMinimumPositionMm) * 1000L;
+  return kMinimumPositionMilliMm;
 }
 
 inline int32_t maximumPositionMilliMm() {
-  return static_cast<int32_t>(kMaximumPositionMm) * 1000L;
+  return kMaximumPositionMilliMm;
 }
 
 inline uint32_t strokeMilliMm() {
   return static_cast<uint32_t>(maximumPositionMilliMm() - minimumPositionMilliMm());
 }
 
+inline int32_t fullStrokeMilliMm() {
+  return kFullStrokeMilliMm;
+}
+
+inline int32_t apertureIrisMinimumMilliMm() {
+  return kApertureIrisMinMilliMm;
+}
+
+inline int32_t apertureIrisMaximumMilliMm() {
+  return kApertureIrisMaxMilliMm;
+}
+
+inline uint32_t apertureIrisStrokeMilliMm() {
+  return static_cast<uint32_t>(apertureIrisMaximumMilliMm() -
+                               apertureIrisMinimumMilliMm());
+}
+
 inline uint32_t activeStepsPerStroke(uint16_t microsteps) {
   return static_cast<uint32_t>(kFullStrokeSteps1x) * static_cast<uint32_t>(microsteps);
 }
 
+inline uint32_t activeStepsPerMmX1000(uint16_t microsteps) {
+  return kStepsPerMmX1000 * static_cast<uint32_t>(microsteps);
+}
+
 inline uint32_t speedLimitedStepDelayUsFor(uint16_t microsteps) {
-  const uint32_t denominator =
-      2UL * activeStepsPerStroke(microsteps) * static_cast<uint32_t>(kMaximumSpeedMmPerSec);
-  const uint32_t numerator = 1000UL * strokeMilliMm();
-  return (numerator + denominator - 1UL) / denominator;
+  const uint64_t denominator =
+      2ULL * activeStepsPerMmX1000(microsteps) *
+      static_cast<uint32_t>(kMaximumSpeedMmPerSec);
+  const uint64_t numerator = 1000000000ULL;
+  return static_cast<uint32_t>((numerator + denominator - 1ULL) / denominator);
 }
 
 inline uint32_t effectiveNormalStepDelayUsFor(uint16_t microsteps) {
@@ -94,9 +124,10 @@ inline uint32_t estimatedMaxSpeedMilliMmPerSecForDelay(uint16_t microsteps,
     return 0;
   }
 
-  const uint32_t numerator = 1000000UL * strokeMilliMm();
-  const uint32_t denominator = 2UL * activeStepsPerStroke(microsteps) * delayUs;
-  return numerator / denominator;
+  const uint64_t numerator = 1000000000000ULL;
+  const uint64_t denominator =
+      2ULL * static_cast<uint64_t>(delayUs) * activeStepsPerMmX1000(microsteps);
+  return static_cast<uint32_t>(numerator / denominator);
 }
 
 inline uint32_t homingStepDelayUsFor(uint16_t microsteps) {

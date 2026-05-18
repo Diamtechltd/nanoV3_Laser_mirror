@@ -1,11 +1,11 @@
-tmc2209:
-  uart_enabled: true
-  uart_baud: 57600
+aperture_iris:
+  min_mm: 2.5 #fix endstop set to 1                       # in mm
+  max_mm: 17                      # in mm
 
 motion:
   endstop_enabled: true
   minimum_position: 0             # in mm
-  maximum_position: 30            # in mm
+  maximum_position: 22.24         # in mm
   maximum_speed: 50               # in mm/s
   default_current_ma: 140         # 140 mA is a good default for the this stepper motor.
   default_microsteps: 4
@@ -18,8 +18,17 @@ homing:
   double_tap_distance_mm: 2
   second_seek_delay_multiplier: 2
 
+tmc2209:
+  uart_enabled: true
+  uart_baud: 57600
+
+arduino:
+  debug_mode: false
+  save_config_to_eeprom: true
+
 stepper_motor:
-  steps_per_revolution: 200
+  steps_per_mm: 193.333
+  full_stroke_mm: 30
   full_stroke_steps_1x: 5800
   microsteps_delay: # safe minimum delay in microseconds for each microstep, to avoid losing steps at high speeds
     1: 275

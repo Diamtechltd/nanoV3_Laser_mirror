@@ -8,15 +8,16 @@
 - `platformio.ini` contains board, dependency, and pre-build script configuration.
 - `pins.yaml` is the editable source of truth for board pin inventory and active pin assignments.
 - `conf.yaml` is the editable source of truth for tunable build-time defaults and feature toggles.
-- `conf.yaml` also contains the `stepper_motor` motor profile, stroke calibration, position limits, speed limits, and per-microstep timing defaults.
+- `conf.yaml` also contains the `stepper_motor` motor profile, measured steps/mm calibration, reference stroke calibration, position limits, speed limits, and per-microstep timing defaults.
 - `conf.yaml` also carries double-tap homing verification settings under `homing`.
+- `conf.yaml` also carries linear aperture-iris calibration under `aperture_iris`.
 - `connection_diagram.txt` is the human-readable wiring reference and must match `pins.yaml` and endstop wiring semantics.
 - `scripts/generate_board_pins.py` validates `pins.yaml` and generates `GeneratedBoardPins.h` into the build directory.
 - `scripts/generate_build_config.py` validates `conf.yaml` and generates `GeneratedBuildConfig.h` into the build directory.
 - `include/BoardConfig.h` consumes generated pin values and keeps only non-pin board settings.
 - `include/DriverConfig.h` wraps generated tunable defaults plus fixed non-user hardware constants.
 - `src/main.cpp` owns the user-facing serial command loop, motion state, endstop logic, and homing flow.
-- `src/main.cpp` also owns mm position tracking and absolute-position command handling.
+- `src/main.cpp` also owns mm position tracking, raw absolute travel moves, and aperture-opening command handling.
 - `src/Tmc2209Driver.*` owns TMC2209 UART-specific setup, readback, and status helpers only.
 
 ## Working rules
@@ -42,6 +43,10 @@
 - Homing step delay is derived automatically as `2x` the normal delay for the active microstep setting.
 - Position becomes known after homing or after backing into the minimum endstop.
 - Absolute `g <mm>` moves use fixed-point `0.001 mm` tracking and obey configured min/max limits.
+- `stepper_motor.steps_per_mm` is the source of truth for raw travel conversion; `full_stroke_mm` and `full_stroke_steps_1x` are diagnostic cross-check values.
+- `A <mm>` maps user-facing aperture opening mm onto raw travel using the configured linear iris range.
+- `m <steps>` is always a literal signed step command and is not scaled by the default-distance baseline.
+- Status output includes `speed limit us` and `est max mm/s` to explain the active timing cap.
 - UART support is optional and controlled through build-time config.
 
 ## PlatformIO workflow

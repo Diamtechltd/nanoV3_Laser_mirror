@@ -49,9 +49,15 @@ struct MotionState {
   MotionMode mode = MotionMode::kNormal;
 };
 
+struct MoveContext {
+  bool reportApertureOnCompletion = false;
+  int32_t requestedApertureMilliMm = 0;
+};
+
 Tmc2209Driver tmc;
 MotionState motion;
 HomingCycleState homingCycle;
+MoveContext moveContext;
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
 bool endstopEnabled = driver_config::kEndstopEnabled;
@@ -106,6 +112,8 @@ void printDivider() { Serial.println(F("----------------------------------------
 
 void resetMotionState() { motion = MotionState{}; }
 
+void resetMoveContext() { moveContext = MoveContext{}; }
+
 bool shouldHonorEndstop(MotionMode mode) {
   return mode == MotionMode::kHomingSeekInitial ||
          mode == MotionMode::kHomingSeekVerify || endstopEnabled;
@@ -128,33 +136,43 @@ int32_t clampPositionMilliMm(int32_t positionMilliMm) {
   return positionMilliMm;
 }
 
+int32_t clampApertureMilliMm(int32_t apertureMilliMm) {
+  if (apertureMilliMm < driver_config::apertureIrisMinimumMilliMm()) {
+    return driver_config::apertureIrisMinimumMilliMm();
+  }
+
+  if (apertureMilliMm > driver_config::apertureIrisMaximumMilliMm()) {
+    return driver_config::apertureIrisMaximumMilliMm();
+  }
+
+  return apertureMilliMm;
+}
+
 unsigned long milliMmToSteps(int32_t milliMm, uint16_t microsteps) {
-  const uint32_t strokeMilliMm = driver_config::strokeMilliMm();
-  if (strokeMilliMm == 0) {
+  const uint32_t activeStepsPerMmX1000 =
+      driver_config::activeStepsPerMmX1000(microsteps);
+  if (activeStepsPerMmX1000 == 0) {
     return 0;
   }
 
-  const uint32_t activeStepsPerStroke =
-      driver_config::activeStepsPerStroke(microsteps);
   const uint32_t absoluteMilliMm =
       static_cast<uint32_t>(milliMm >= 0 ? milliMm : -milliMm);
-  const uint32_t roundedSteps =
-      (absoluteMilliMm * activeStepsPerStroke + (strokeMilliMm / 2UL)) /
-      strokeMilliMm;
+  const uint64_t roundedSteps =
+      (static_cast<uint64_t>(absoluteMilliMm) * activeStepsPerMmX1000 + 500000ULL) /
+      1000000ULL;
   return static_cast<unsigned long>(roundedSteps);
 }
 
 int32_t stepsToMilliMm(unsigned long steps, uint16_t microsteps) {
-  const uint32_t activeStepsPerStroke =
-      driver_config::activeStepsPerStroke(microsteps);
-  if (activeStepsPerStroke == 0) {
+  const uint32_t activeStepsPerMmX1000 =
+      driver_config::activeStepsPerMmX1000(microsteps);
+  if (activeStepsPerMmX1000 == 0) {
     return 0;
   }
 
-  const uint32_t strokeMilliMm = driver_config::strokeMilliMm();
-  const uint32_t roundedMilliMm =
-      (steps * strokeMilliMm + (activeStepsPerStroke / 2UL)) /
-      activeStepsPerStroke;
+  const uint64_t roundedMilliMm =
+      (static_cast<uint64_t>(steps) * 1000000ULL + (activeStepsPerMmX1000 / 2ULL)) /
+      activeStepsPerMmX1000;
   return static_cast<int32_t>(roundedMilliMm);
 }
 
@@ -176,6 +194,40 @@ void printMilliMm(int32_t milliMm) {
     Serial.print(F("0"));
   }
   Serial.print(fraction);
+}
+
+int32_t travelPositionToApertureMilliMm(int32_t travelPositionMilliMm) {
+  const uint32_t motionStrokeMilliMm = driver_config::strokeMilliMm();
+  if (motionStrokeMilliMm == 0) {
+    return driver_config::apertureIrisMinimumMilliMm();
+  }
+
+  const int32_t clampedTravelMilliMm = clampPositionMilliMm(travelPositionMilliMm);
+  const uint32_t normalizedTravelMilliMm = static_cast<uint32_t>(
+      clampedTravelMilliMm - driver_config::minimumPositionMilliMm());
+  const uint32_t apertureStrokeMilliMm = driver_config::apertureIrisStrokeMilliMm();
+  const uint32_t apertureOffsetMilliMm =
+      (normalizedTravelMilliMm * apertureStrokeMilliMm + (motionStrokeMilliMm / 2UL)) /
+      motionStrokeMilliMm;
+  return clampApertureMilliMm(driver_config::apertureIrisMinimumMilliMm() +
+                              static_cast<int32_t>(apertureOffsetMilliMm));
+}
+
+int32_t apertureOpeningToTravelPositionMilliMm(int32_t apertureMilliMm) {
+  const uint32_t apertureStrokeMilliMm = driver_config::apertureIrisStrokeMilliMm();
+  if (apertureStrokeMilliMm == 0) {
+    return driver_config::minimumPositionMilliMm();
+  }
+
+  const int32_t clampedApertureMilliMm = clampApertureMilliMm(apertureMilliMm);
+  const uint32_t normalizedApertureMilliMm = static_cast<uint32_t>(
+      clampedApertureMilliMm - driver_config::apertureIrisMinimumMilliMm());
+  const uint32_t motionStrokeMilliMm = driver_config::strokeMilliMm();
+  const uint32_t travelOffsetMilliMm =
+      (normalizedApertureMilliMm * motionStrokeMilliMm + (apertureStrokeMilliMm / 2UL)) /
+      apertureStrokeMilliMm;
+  return clampPositionMilliMm(driver_config::minimumPositionMilliMm() +
+                              static_cast<int32_t>(travelOffsetMilliMm));
 }
 
 bool parseMilliMm(const String& text, int32_t* milliMmOut) {
@@ -303,6 +355,20 @@ void printHomingVerificationSummary() {
   Serial.print(stepDiff);
   Serial.print(F(" steps / "));
   printMilliMm(milliMmDiff);
+  Serial.println(F(" mm"));
+}
+
+void printApertureMoveResult() {
+  if (!moveContext.reportApertureOnCompletion || !positionKnown) {
+    return;
+  }
+
+  Serial.print(F("Aperture requested : "));
+  printMilliMm(moveContext.requestedApertureMilliMm);
+  Serial.println(F(" mm"));
+
+  Serial.print(F("Aperture result    : "));
+  printMilliMm(travelPositionToApertureMilliMm(currentPositionMilliMm));
   Serial.println(F(" mm"));
 }
 
@@ -449,9 +515,17 @@ void finishMove(bool aborted, MotionAbortReason reason) {
     printHomingVerificationSummary();
   }
 
+  if (!aborted && finishedMode == MotionMode::kNormal) {
+    printApertureMoveResult();
+  }
+
   if (finishedMode != MotionMode::kNormal &&
       (aborted || finishedMode == MotionMode::kHomingRetract)) {
     homingCycle.active = false;
+  }
+
+  if (finishedMode == MotionMode::kNormal) {
+    resetMoveContext();
   }
 
   const bool shouldDisable =
@@ -565,6 +639,33 @@ void startAbsolutePositionMove(int32_t targetPositionMilliMm) {
   }
 
   startMove(deltaMilliMm > 0 ? static_cast<long>(steps) : -static_cast<long>(steps));
+}
+
+void startApertureOpeningMove(int32_t targetApertureMilliMm) {
+  resetMoveContext();
+
+  if (!positionKnown) {
+    Serial.println(F("Refusing aperture move: position unknown. Home first."));
+    return;
+  }
+
+  if (targetApertureMilliMm < driver_config::apertureIrisMinimumMilliMm() ||
+      targetApertureMilliMm > driver_config::apertureIrisMaximumMilliMm()) {
+    Serial.print(F("Refusing aperture move: target is outside configured aperture range "));
+    printMilliMm(driver_config::apertureIrisMinimumMilliMm());
+    Serial.print(F(".."));
+    printMilliMm(driver_config::apertureIrisMaximumMilliMm());
+    Serial.println(F(" mm."));
+    return;
+  }
+
+  moveContext.reportApertureOnCompletion = true;
+  moveContext.requestedApertureMilliMm = targetApertureMilliMm;
+  startAbsolutePositionMove(apertureOpeningToTravelPositionMilliMm(targetApertureMilliMm));
+
+  if (!motion.active) {
+    resetMoveContext();
+  }
 }
 
 bool startSecondHomingSeek();
@@ -872,6 +973,14 @@ void printStatus() {
   Serial.print(F("  configured mA    : "));
   Serial.println(runCurrentMa);
 
+  Serial.print(F("  steps/mm cfg     : "));
+  printMilliMm(static_cast<int32_t>(driver_config::kStepsPerMmX1000));
+  Serial.println();
+
+  Serial.print(F("  steps/mm drv     : "));
+  printMilliMm(static_cast<int32_t>(driver_config::kDerivedStepsPerMmX1000));
+  Serial.println();
+
   Serial.print(F("  microsteps       : "));
   Serial.println(currentMicrosteps);
 
@@ -924,6 +1033,7 @@ void printHelp() {
   Serial.println(F("  m 1000         move signed steps"));
   Serial.println(F("  m -1000        move signed steps backward"));
   Serial.println(F("  g 12.345       go to absolute position 12.345 mm"));
+  Serial.println(F("  A 8.500        go to aperture opening 8.500 mm"));
   Serial.println(F("  H              home with double-tap verification"));
   Serial.println(F("  H 50           home, verify, then retract 50 steps"));
   Serial.println(F("  E              toggle endstop protection"));
@@ -978,14 +1088,17 @@ void handleCommand(String line) {
       break;
 
     case 'f':
+      resetMoveContext();
       startMove(arg.length() ? value : effectiveDefaultMoveSteps());
       break;
 
     case 'b':
+      resetMoveContext();
       startMove(arg.length() ? -value : -effectiveDefaultMoveSteps());
       break;
 
     case 'm':
+      resetMoveContext();
       if (arg.length() == 0) {
         Serial.println(F("Usage: m 1000 or m -1000"));
       } else {
@@ -994,11 +1107,22 @@ void handleCommand(String line) {
       break;
 
     case 'g': {
+      resetMoveContext();
       int32_t targetPositionMilliMm = 0;
       if (!parseMilliMm(arg, &targetPositionMilliMm)) {
         Serial.println(F("Usage: g 12.345"));
       } else {
         startAbsolutePositionMove(targetPositionMilliMm);
+      }
+      break;
+    }
+
+    case 'A': {
+      int32_t targetApertureMilliMm = 0;
+      if (!parseMilliMm(arg, &targetApertureMilliMm)) {
+        Serial.println(F("Usage: A 8.500"));
+      } else {
+        startApertureOpeningMove(targetApertureMilliMm);
       }
       break;
     }
