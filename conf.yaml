@@ -3,15 +3,31 @@ tmc2209:
   uart_baud: 57600
 
 motion:
-  default_current_ma: 160
-  default_microsteps: 16
-  default_step_delay_us: 50
-  default_move_steps: 1000
+  endstop_enabled: true
+  minimum_position: 0             # in mm
+  maximum_position: 30            # in mm
+  maximum_speed: 50               # in mm/s
+  default_current_ma: 140         # 140 mA is a good default for the this stepper motor.
+  default_microsteps: 4
+  default_move_steps: 1000        # for 1 microstep
   auto_disable_after_move: true
 
 homing:
-  enabled: true
-  step_delay_us: 1000
   retract_steps: 0
   direction_negative: true
+  double_tap_distance_mm: 2
+  second_seek_delay_multiplier: 2
 
+stepper_motor:
+  steps_per_revolution: 200
+  full_stroke_steps_1x: 5800
+  microsteps_delay: # safe minimum delay in microseconds for each microstep, to avoid losing steps at high speeds
+    1: 275
+    2: 140
+    4: 70
+    8: 25
+    16: 12
+    32: 6
+    64: 5
+    128: 5
+    256: 5

@@ -15,8 +15,20 @@ enum class MotionAbortReason : uint8_t {
 
 enum class MotionMode : uint8_t {
   kNormal = 0,
-  kHomingSeek,
+  kHomingSeekInitial,
+  kHomingClearance,
+  kHomingSeekVerify,
   kHomingRetract,
+};
+
+struct HomingCycleState {
+  bool active = false;
+  unsigned long plannedRetractSteps = 0;
+  unsigned long expectedSecondPassSteps = 0;
+  int32_t expectedSecondPassMilliMm = 0;
+  unsigned long actualSecondPassSteps = 0;
+  int32_t actualSecondPassMilliMm = 0;
+  bool verificationReady = false;
 };
 
 struct MotionState {
@@ -39,16 +51,19 @@ struct MotionState {
 
 Tmc2209Driver tmc;
 MotionState motion;
+HomingCycleState homingCycle;
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
-bool homingEnabled = driver_config::kHomingEnabled;
+bool endstopEnabled = driver_config::kEndstopEnabled;
 bool motionReady = true;
 bool tmcOk = false;
+bool positionKnown = false;
 
-uint32_t stepDelayUs = driver_config::kDefaultStepDelayUs;
 uint16_t runCurrentMa = driver_config::kDefaultCurrentMa;
 uint16_t currentMicrosteps = driver_config::kDefaultMicrosteps;
+uint32_t stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
 MotionAbortReason lastMotionAbort = MotionAbortReason::kNone;
+int32_t currentPositionMilliMm = driver_config::minimumPositionMilliMm();
 
 bool hasReachedMillis(unsigned long now, unsigned long target) {
   return static_cast<long>(now - target) >= 0;
@@ -66,8 +81,10 @@ bool isEndstopTriggered() {
 bool motionDrivesIntoMinimumEndstop(MotionMode mode, bool logicalForward) {
   switch (mode) {
     case MotionMode::kNormal:
-    case MotionMode::kHomingSeek:
+    case MotionMode::kHomingSeekInitial:
+    case MotionMode::kHomingSeekVerify:
       return !logicalForward;
+    case MotionMode::kHomingClearance:
     case MotionMode::kHomingRetract:
       return false;
   }
@@ -88,6 +105,206 @@ void disableDriver() {
 void printDivider() { Serial.println(F("----------------------------------------")); }
 
 void resetMotionState() { motion = MotionState{}; }
+
+bool shouldHonorEndstop(MotionMode mode) {
+  return mode == MotionMode::kHomingSeekInitial ||
+         mode == MotionMode::kHomingSeekVerify || endstopEnabled;
+}
+
+long effectiveDefaultMoveSteps() {
+  return driver_config::kDefaultMoveSteps *
+         static_cast<long>(currentMicrosteps);
+}
+
+int32_t clampPositionMilliMm(int32_t positionMilliMm) {
+  if (positionMilliMm < driver_config::minimumPositionMilliMm()) {
+    return driver_config::minimumPositionMilliMm();
+  }
+
+  if (positionMilliMm > driver_config::maximumPositionMilliMm()) {
+    return driver_config::maximumPositionMilliMm();
+  }
+
+  return positionMilliMm;
+}
+
+unsigned long milliMmToSteps(int32_t milliMm, uint16_t microsteps) {
+  const uint32_t strokeMilliMm = driver_config::strokeMilliMm();
+  if (strokeMilliMm == 0) {
+    return 0;
+  }
+
+  const uint32_t activeStepsPerStroke =
+      driver_config::activeStepsPerStroke(microsteps);
+  const uint32_t absoluteMilliMm =
+      static_cast<uint32_t>(milliMm >= 0 ? milliMm : -milliMm);
+  const uint32_t roundedSteps =
+      (absoluteMilliMm * activeStepsPerStroke + (strokeMilliMm / 2UL)) /
+      strokeMilliMm;
+  return static_cast<unsigned long>(roundedSteps);
+}
+
+int32_t stepsToMilliMm(unsigned long steps, uint16_t microsteps) {
+  const uint32_t activeStepsPerStroke =
+      driver_config::activeStepsPerStroke(microsteps);
+  if (activeStepsPerStroke == 0) {
+    return 0;
+  }
+
+  const uint32_t strokeMilliMm = driver_config::strokeMilliMm();
+  const uint32_t roundedMilliMm =
+      (steps * strokeMilliMm + (activeStepsPerStroke / 2UL)) /
+      activeStepsPerStroke;
+  return static_cast<int32_t>(roundedMilliMm);
+}
+
+void printMilliMm(int32_t milliMm) {
+  const bool negative = milliMm < 0;
+  const int32_t absoluteValue = negative ? -milliMm : milliMm;
+
+  if (negative) {
+    Serial.print(F("-"));
+  }
+
+  Serial.print(absoluteValue / 1000L);
+  Serial.print(F("."));
+  const int32_t fraction = absoluteValue % 1000L;
+  if (fraction < 100) {
+    Serial.print(F("0"));
+  }
+  if (fraction < 10) {
+    Serial.print(F("0"));
+  }
+  Serial.print(fraction);
+}
+
+bool parseMilliMm(const String& text, int32_t* milliMmOut) {
+  if (milliMmOut == nullptr) {
+    return false;
+  }
+
+  if (text.length() == 0) {
+    return false;
+  }
+
+  bool negative = false;
+  size_t index = 0;
+  if (text.charAt(0) == '-') {
+    negative = true;
+    index = 1;
+  } else if (text.charAt(0) == '+') {
+    index = 1;
+  }
+
+  if (index >= static_cast<size_t>(text.length())) {
+    return false;
+  }
+
+  long whole = 0;
+  bool hasWholeDigits = false;
+  while (index < static_cast<size_t>(text.length())) {
+    const char c = text.charAt(index);
+    if (c < '0' || c > '9') {
+      break;
+    }
+    hasWholeDigits = true;
+    whole = whole * 10L + (c - '0');
+    ++index;
+  }
+
+  int32_t fraction = 0;
+  if (index < static_cast<size_t>(text.length()) && text.charAt(index) == '.') {
+    ++index;
+    int fractionDigits = 0;
+    while (index < static_cast<size_t>(text.length())) {
+      const char c = text.charAt(index);
+      if (c < '0' || c > '9' || fractionDigits >= 3) {
+        break;
+      }
+      fraction = fraction * 10 + (c - '0');
+      ++fractionDigits;
+      ++index;
+    }
+
+    if (fractionDigits == 1) {
+      fraction *= 100;
+    } else if (fractionDigits == 2) {
+      fraction *= 10;
+    }
+
+    while (index < static_cast<size_t>(text.length()) &&
+           text.charAt(index) >= '0' && text.charAt(index) <= '9') {
+      return false;
+    }
+  }
+
+  if (!hasWholeDigits || index != static_cast<size_t>(text.length())) {
+    return false;
+  }
+
+  int32_t milliMm = static_cast<int32_t>(whole * 1000L + fraction);
+  if (negative) {
+    milliMm = -milliMm;
+  }
+
+  *milliMmOut = milliMm;
+  return true;
+}
+
+void updateTrackedPositionFromSteps(bool logicalForward, unsigned long stepsTaken) {
+  if (!positionKnown || stepsTaken == 0) {
+    return;
+  }
+
+  const int32_t deltaMilliMm = stepsToMilliMm(stepsTaken, currentMicrosteps);
+  currentPositionMilliMm += logicalForward ? deltaMilliMm : -deltaMilliMm;
+  currentPositionMilliMm = clampPositionMilliMm(currentPositionMilliMm);
+}
+
+void setKnownPositionToMinimum() {
+  positionKnown = true;
+  currentPositionMilliMm = driver_config::minimumPositionMilliMm();
+}
+
+void resetHomingCycle(unsigned long retractSteps) {
+  homingCycle = HomingCycleState{};
+  homingCycle.active = true;
+  homingCycle.plannedRetractSteps = retractSteps;
+  homingCycle.expectedSecondPassMilliMm =
+      static_cast<int32_t>(driver_config::kHomingDoubleTapDistanceMm) * 1000L;
+  homingCycle.expectedSecondPassSteps =
+      milliMmToSteps(homingCycle.expectedSecondPassMilliMm, currentMicrosteps);
+}
+
+void printHomingVerificationSummary() {
+  if (!homingCycle.verificationReady) {
+    return;
+  }
+
+  const long stepDiff = static_cast<long>(homingCycle.actualSecondPassSteps) -
+                        static_cast<long>(homingCycle.expectedSecondPassSteps);
+  const int32_t milliMmDiff =
+      homingCycle.actualSecondPassMilliMm - homingCycle.expectedSecondPassMilliMm;
+
+  Serial.println(F("Homing verification:"));
+  Serial.print(F("  expected re-home : "));
+  Serial.print(homingCycle.expectedSecondPassSteps);
+  Serial.print(F(" steps / "));
+  printMilliMm(homingCycle.expectedSecondPassMilliMm);
+  Serial.println(F(" mm"));
+
+  Serial.print(F("  actual re-home   : "));
+  Serial.print(homingCycle.actualSecondPassSteps);
+  Serial.print(F(" steps / "));
+  printMilliMm(homingCycle.actualSecondPassMilliMm);
+  Serial.println(F(" mm"));
+
+  Serial.print(F("  difference       : "));
+  Serial.print(stepDiff);
+  Serial.print(F(" steps / "));
+  printMilliMm(milliMmDiff);
+  Serial.println(F(" mm"));
+}
 
 const __FlashStringHelper* motionAbortReasonText(MotionAbortReason reason) {
   switch (reason) {
@@ -155,10 +372,16 @@ bool setMicrosteps(uint16_t microsteps) {
   }
 
   currentMicrosteps = microsteps;
+  stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
 
   if (status == Tmc2209Driver::MicrostepStatus::kOk) {
     Serial.print(F("Microsteps set to: "));
     Serial.println(currentMicrosteps);
+    Serial.print(F("Step delay auto-set to: "));
+    Serial.print(stepDelayUs);
+    Serial.print(F(" us, homing delay: "));
+    Serial.print(driver_config::homingStepDelayUsFor(currentMicrosteps));
+    Serial.println(F(" us."));
     tmcOk = tmc.isConnected();
     return true;
   }
@@ -166,6 +389,11 @@ bool setMicrosteps(uint16_t microsteps) {
   Serial.print(F("WARNING: "));
   Serial.println(microstepStatusText(status));
   Serial.println(F("Microstep setting saved locally but not applied to the driver."));
+  Serial.print(F("Step delay auto-set to: "));
+  Serial.print(stepDelayUs);
+  Serial.print(F(" us, homing delay: "));
+  Serial.print(driver_config::homingStepDelayUsFor(currentMicrosteps));
+  Serial.println(F(" us."));
   tmcOk = tmc.isConnected();
   return false;
 }
@@ -187,6 +415,8 @@ void finishMove(bool aborted, MotionAbortReason reason) {
   }
 
   const MotionMode finishedMode = motion.mode;
+  const bool finishedLogicalForward = motion.logicalForward;
+  const unsigned long finishedCompletedSteps = motion.completedSteps;
   digitalWrite(board::kStepPin, LOW);
 
   if (aborted) {
@@ -196,11 +426,33 @@ void finishMove(bool aborted, MotionAbortReason reason) {
     Serial.println(F(")."));
   } else {
     lastMotionAbort = MotionAbortReason::kNone;
-    Serial.println(finishedMode == MotionMode::kHomingRetract ? F("Homing complete.")
-                                                              : F("Move done."));
+    Serial.println(finishedMode == MotionMode::kNormal ? F("Move done.")
+                                                       : F("Homing complete."));
   }
 
   resetMotionState();
+
+  if (finishedMode == MotionMode::kNormal || finishedMode == MotionMode::kHomingClearance ||
+      finishedMode == MotionMode::kHomingRetract) {
+    updateTrackedPositionFromSteps(finishedLogicalForward, finishedCompletedSteps);
+  }
+
+  if ((finishedMode == MotionMode::kNormal ||
+       finishedMode == MotionMode::kHomingSeekInitial ||
+       finishedMode == MotionMode::kHomingSeekVerify) &&
+      aborted && reason == MotionAbortReason::kEndstopTriggered &&
+      !finishedLogicalForward) {
+    setKnownPositionToMinimum();
+  }
+
+  if (!aborted && finishedMode == MotionMode::kHomingRetract) {
+    printHomingVerificationSummary();
+  }
+
+  if (finishedMode != MotionMode::kNormal &&
+      (aborted || finishedMode == MotionMode::kHomingRetract)) {
+    homingCycle.active = false;
+  }
 
   const bool shouldDisable =
       finishedMode == MotionMode::kNormal ? (autoDisableAfterMove || aborted)
@@ -237,7 +489,7 @@ bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
     return false;
   }
 
-  if (!allowTriggeredStart && isEndstopTriggered() &&
+  if (!allowTriggeredStart && shouldHonorEndstop(mode) && isEndstopTriggered() &&
       motionDrivesIntoMinimumEndstop(mode, logicalForward)) {
     lastMotionAbort = MotionAbortReason::kEndstopTriggered;
     Serial.println(F("Refusing move: endstop input is active for this direction."));
@@ -293,13 +545,40 @@ void startMove(long steps) {
   }
 }
 
+void startAbsolutePositionMove(int32_t targetPositionMilliMm) {
+  if (!positionKnown) {
+    Serial.println(F("Refusing absolute move: position unknown. Home first."));
+    return;
+  }
+
+  if (targetPositionMilliMm < driver_config::minimumPositionMilliMm() ||
+      targetPositionMilliMm > driver_config::maximumPositionMilliMm()) {
+    Serial.println(F("Refusing absolute move: target is outside configured range."));
+    return;
+  }
+
+  const int32_t deltaMilliMm = targetPositionMilliMm - currentPositionMilliMm;
+  const unsigned long steps = milliMmToSteps(deltaMilliMm, currentMicrosteps);
+  if (steps == 0) {
+    Serial.println(F("Absolute move ignored: already at target."));
+    return;
+  }
+
+  startMove(deltaMilliMm > 0 ? static_cast<long>(steps) : -static_cast<long>(steps));
+}
+
+bool startSecondHomingSeek();
+
 void finishHomingWithoutRetract() {
+  setKnownPositionToMinimum();
   Serial.println(F("Endstop triggered."));
+  printHomingVerificationSummary();
   Serial.println(F("No homing retract requested."));
   disableDriver();
   Serial.println(F("Homing complete."));
   Serial.println(F("Driver disabled after homing."));
   lastMotionAbort = MotionAbortReason::kNone;
+  homingCycle.active = false;
   Serial.println();
 }
 
@@ -311,8 +590,9 @@ void startHomingRetract(unsigned long retractSteps) {
 
   const bool retractForward = driver_config::kHomingDirectionNegative;
   if (!beginMotion(retractForward, retractSteps, true,
-                   driver_config::kHomingStepDelayUs,
+                   driver_config::homingStepDelayUsFor(currentMicrosteps),
                    MotionMode::kHomingRetract, true)) {
+    homingCycle.active = false;
     return;
   }
 
@@ -321,39 +601,104 @@ void startHomingRetract(unsigned long retractSteps) {
   Serial.println(F(" steps away from endstop."));
 }
 
-void handleHomingTrigger() {
-  const unsigned long retractSteps = motion.plannedRetractSteps;
+bool startDoubleTapAdvance() {
+  if (homingCycle.expectedSecondPassSteps == 0) {
+    Serial.println(F("ERROR: double-tap distance resolved to 0 steps."));
+    homingCycle.active = false;
+    return false;
+  }
 
-  digitalWrite(board::kStepPin, LOW);
-  resetMotionState();
-  startHomingRetract(retractSteps);
+  const bool advanceForward = driver_config::kHomingDirectionNegative;
+  if (!beginMotion(advanceForward, homingCycle.expectedSecondPassSteps, true,
+                   driver_config::homingStepDelayUsFor(currentMicrosteps),
+                   MotionMode::kHomingClearance, true)) {
+    homingCycle.active = false;
+    return false;
+  }
+
+  Serial.print(F("Endstop triggered. Advancing "));
+  printMilliMm(homingCycle.expectedSecondPassMilliMm);
+  Serial.print(F(" mm ("));
+  Serial.print(homingCycle.expectedSecondPassSteps);
+  Serial.println(F(" steps) for double-tap verification."));
+  return true;
 }
 
-void homeAperture(unsigned long retractSteps) {
-  if (!homingEnabled) {
-    Serial.println(F("Homing is disabled. Toggle it with E first."));
+bool startSecondHomingSeek() {
+  const bool homingForward = !driver_config::kHomingDirectionNegative;
+  if (isEndstopTriggered()) {
+    Serial.println(F("ERROR: Endstop still active before second homing seek."));
+    homingCycle.active = false;
+    return false;
+  }
+
+  if (!beginMotion(homingForward, 0, false,
+                   driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps),
+                   MotionMode::kHomingSeekVerify, false)) {
+    homingCycle.active = false;
+    return false;
+  }
+
+  Serial.print(F("Second homing seek at "));
+  Serial.print(driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps));
+  Serial.println(F(" us per edge."));
+  return true;
+}
+
+void completeHomingClearance() {
+  const unsigned long clearanceSteps = motion.completedSteps;
+  digitalWrite(board::kStepPin, LOW);
+  updateTrackedPositionFromSteps(true, clearanceSteps);
+  resetMotionState();
+  startSecondHomingSeek();
+}
+
+void handleHomingTrigger() {
+  const MotionMode finishedMode = motion.mode;
+  const unsigned long completedSteps = motion.completedSteps;
+
+  digitalWrite(board::kStepPin, LOW);
+  setKnownPositionToMinimum();
+  resetMotionState();
+
+  if (finishedMode == MotionMode::kHomingSeekInitial) {
+    startDoubleTapAdvance();
     return;
   }
 
+  homingCycle.actualSecondPassSteps = completedSteps;
+  homingCycle.actualSecondPassMilliMm =
+      stepsToMilliMm(homingCycle.actualSecondPassSteps, currentMicrosteps);
+  homingCycle.verificationReady = true;
+  startHomingRetract(homingCycle.plannedRetractSteps);
+}
+
+void homeAperture(unsigned long retractSteps) {
   if (isEndstopTriggered()) {
     lastMotionAbort = MotionAbortReason::kEndstopTriggered;
     Serial.println(F("Refusing homing: endstop input is already active."));
     return;
   }
 
+  resetHomingCycle(retractSteps);
+
   const bool homingForward = !driver_config::kHomingDirectionNegative;
-  if (!beginMotion(homingForward, 0, false, driver_config::kHomingStepDelayUs,
-                   MotionMode::kHomingSeek, false)) {
+  if (!beginMotion(homingForward, 0, false,
+                   driver_config::homingStepDelayUsFor(currentMicrosteps),
+                   MotionMode::kHomingSeekInitial, false)) {
+    homingCycle.active = false;
     return;
   }
-
-  motion.plannedRetractSteps = retractSteps;
 
   Serial.println();
   Serial.print(F("Homing "));
   Serial.print(homingForward ? F("forward") : F("backward"));
   Serial.print(F(" at "));
-  Serial.print(driver_config::kHomingStepDelayUs);
+  Serial.print(driver_config::homingStepDelayUsFor(currentMicrosteps));
+  Serial.print(F(" us per edge. Double-tap distance: "));
+  printMilliMm(homingCycle.expectedSecondPassMilliMm);
+  Serial.print(F(" mm, second seek: "));
+  Serial.print(driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps));
   Serial.println(F(" us per edge."));
 }
 
@@ -362,9 +707,10 @@ void serviceMotion() {
     return;
   }
 
-  if (isEndstopTriggered() &&
+  if (shouldHonorEndstop(motion.mode) && isEndstopTriggered() &&
       motionDrivesIntoMinimumEndstop(motion.mode, motion.logicalForward)) {
-    if (motion.mode == MotionMode::kHomingSeek) {
+    if (motion.mode == MotionMode::kHomingSeekInitial ||
+        motion.mode == MotionMode::kHomingSeekVerify) {
       handleHomingTrigger();
     } else {
       finishMove(true, MotionAbortReason::kEndstopTriggered);
@@ -420,6 +766,10 @@ void serviceMotion() {
   }
 
   if (motion.bounded && motion.completedSteps >= motion.totalSteps) {
+    if (motion.mode == MotionMode::kHomingClearance) {
+      completeHomingClearance();
+      return;
+    }
     finishMove(false, MotionAbortReason::kNone);
     return;
   }
@@ -448,8 +798,31 @@ void printStatus() {
   Serial.print(F("  endstop state    : "));
   Serial.println(isEndstopTriggered() ? F("TRIGGERED") : F("IDLE"));
 
-  Serial.print(F("  homing enabled   : "));
-  Serial.println(homingEnabled ? F("ON") : F("OFF"));
+  Serial.print(F("  endstop enabled  : "));
+  Serial.println(endstopEnabled ? F("ON") : F("OFF"));
+
+  Serial.print(F("  position known   : "));
+  Serial.println(positionKnown ? F("YES") : F("NO"));
+
+  Serial.print(F("  position mm      : "));
+  if (positionKnown) {
+    printMilliMm(currentPositionMilliMm);
+    Serial.println();
+  } else {
+    Serial.println(F("unknown"));
+  }
+
+  Serial.print(F("  min position mm  : "));
+  printMilliMm(driver_config::minimumPositionMilliMm());
+  Serial.println();
+
+  Serial.print(F("  max position mm  : "));
+  printMilliMm(driver_config::maximumPositionMilliMm());
+  Serial.println();
+
+  Serial.print(F("  max speed mm/s   : "));
+  printMilliMm(static_cast<int32_t>(driver_config::kMaximumSpeedMmPerSec) * 1000L);
+  Serial.println();
 
   if (motion.active) {
     Serial.print(F("  move progress    : "));
@@ -505,6 +878,26 @@ void printStatus() {
   Serial.print(F("  step delay us    : "));
   Serial.println(stepDelayUs);
 
+  Serial.print(F("  speed limit us   : "));
+  Serial.println(driver_config::speedLimitedStepDelayUsFor(currentMicrosteps));
+
+  Serial.print(F("  auto step delay  : "));
+  Serial.println(driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps));
+
+  Serial.print(F("  homing delay us  : "));
+  Serial.println(driver_config::homingStepDelayUsFor(currentMicrosteps));
+
+  Serial.print(F("  est max mm/s     : "));
+  printMilliMm(static_cast<int32_t>(
+      driver_config::estimatedMaxSpeedMilliMmPerSecForDelay(currentMicrosteps, stepDelayUs)));
+  Serial.println();
+
+  Serial.print(F("  default move 1x  : "));
+  Serial.println(driver_config::kDefaultMoveSteps);
+
+  Serial.print(F("  default move eff : "));
+  Serial.println(effectiveDefaultMoveSteps());
+
   Serial.print(F("  step rate approx : "));
   Serial.print(1000000.0 / (2.0 * stepDelayUs));
   Serial.println(F(" steps/sec"));
@@ -524,19 +917,19 @@ void printHelp() {
   Serial.println(F("  s              status"));
   Serial.println(F("  e              enable driver"));
   Serial.println(F("  d              disable driver"));
-  Serial.println(F("  D7 LOW         blocks backward motion into minimum"));
-  Serial.println(F("  f              move forward default steps"));
-  Serial.println(F("  b              move backward default steps"));
+  Serial.println(F("  f              move forward default distance"));
+  Serial.println(F("  b              move backward default distance"));
   Serial.println(F("  f 2000         move forward 2000 steps"));
   Serial.println(F("  b 2000         move backward 2000 steps"));
   Serial.println(F("  m 1000         move signed steps"));
   Serial.println(F("  m -1000        move signed steps backward"));
-  Serial.println(F("  H              home toward endstop"));
-  Serial.println(F("  H 50           home, then retract 50 steps"));
-  Serial.println(F("  E              toggle homing feature"));
+  Serial.println(F("  g 12.345       go to absolute position 12.345 mm"));
+  Serial.println(F("  H              home with double-tap verification"));
+  Serial.println(F("  H 50           home, verify, then retract 50 steps"));
+  Serial.println(F("  E              toggle endstop protection"));
   Serial.println(F("  i 180          set run current to 180 mA RMS"));
   Serial.println(F("  u 4            set microsteps: 1,2,4,8,16,32,64,128,256"));
-  Serial.println(F("  v 2000         set step delay in microseconds"));
+  Serial.println(F("  v 2000         set step delay in microseconds (temporary override)"));
   Serial.println(F("  a              toggle auto-disable after move"));
   Serial.println();
 }
@@ -585,11 +978,11 @@ void handleCommand(String line) {
       break;
 
     case 'f':
-      startMove(arg.length() ? value : driver_config::kDefaultMoveSteps);
+      startMove(arg.length() ? value : effectiveDefaultMoveSteps());
       break;
 
     case 'b':
-      startMove(arg.length() ? -value : -driver_config::kDefaultMoveSteps);
+      startMove(arg.length() ? -value : -effectiveDefaultMoveSteps());
       break;
 
     case 'm':
@@ -599,6 +992,16 @@ void handleCommand(String line) {
         startMove(value);
       }
       break;
+
+    case 'g': {
+      int32_t targetPositionMilliMm = 0;
+      if (!parseMilliMm(arg, &targetPositionMilliMm)) {
+        Serial.println(F("Usage: g 12.345"));
+      } else {
+        startAbsolutePositionMove(targetPositionMilliMm);
+      }
+      break;
+    }
 
     case 'H':
       if (arg.length() && value < 0) {
@@ -610,9 +1013,9 @@ void handleCommand(String line) {
       break;
 
     case 'E':
-      homingEnabled = !homingEnabled;
-      Serial.print(F("Homing feature: "));
-      Serial.println(homingEnabled ? F("ON") : F("OFF"));
+      endstopEnabled = !endstopEnabled;
+      Serial.print(F("Endstop protection: "));
+      Serial.println(endstopEnabled ? F("ON") : F("OFF"));
       break;
 
     case 'i':
@@ -640,8 +1043,8 @@ void handleCommand(String line) {
       break;
 
     case 'v':
-      if (value < 50 || value > 100000) {
-        Serial.println(F("ERROR: step delay must be 50..100000 us."));
+      if (value < 5 || value > 100000) {
+        Serial.println(F("ERROR: step delay must be 5..100000 us."));
       } else {
         stepDelayUs = static_cast<uint32_t>(value);
         Serial.print(F("Step delay set to "));
@@ -710,6 +1113,7 @@ void initTmcLayer() {
   }
 
   currentMicrosteps = tmc.getRealMicrosteps();
+  stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
   Serial.println(F("OK: TMC2209 detected over UART."));
 }
 
@@ -724,12 +1128,11 @@ void setup() {
 
   Serial.println();
   Serial.println(F("Nano SuperMini aperture driver"));
-  Serial.println(F("PlatformIO baseline for STEP/DIR + optional TMC2209 UART"));
   Serial.println();
 
   initTmcLayer();
-  printHelp();
-  printStatus();
+  //printHelp();
+  //printStatus();
 }
 
 void loop() {

@@ -8,9 +8,27 @@ PROJECT_DIR = Path(ENV.subst("$PROJECT_DIR"))
 BUILD_DIR = Path(ENV.subst("$BUILD_DIR"))
 CONFIG_PATH = PROJECT_DIR / "conf.yaml"
 GENERATED_HEADER_PATH = BUILD_DIR / "GeneratedBuildConfig.h"
+SUPPORTED_MICROSTEPS = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 
 CONFIG_SCHEMA = {
     "motion": {
+        "endstop_enabled": {
+            "symbol": "kEndstopEnabled",
+            "type": bool,
+        },
+        "minimum_position": {
+            "symbol": "kMinimumPositionMm",
+            "type": int,
+        },
+        "maximum_position": {
+            "symbol": "kMaximumPositionMm",
+            "type": int,
+        },
+        "maximum_speed": {
+            "symbol": "kMaximumSpeedMmPerSec",
+            "type": int,
+            "min": 1,
+        },
         "default_current_ma": {
             "symbol": "kDefaultCurrentMa",
             "type": int,
@@ -20,13 +38,7 @@ CONFIG_SCHEMA = {
         "default_microsteps": {
             "symbol": "kDefaultMicrosteps",
             "type": int,
-            "allowed": [1, 2, 4, 8, 16, 32, 64, 128, 256],
-        },
-        "default_step_delay_us": {
-            "symbol": "kDefaultStepDelayUs",
-            "type": int,
-            "min": 50,
-            "max": 100000,
+            "allowed": SUPPORTED_MICROSTEPS,
         },
         "default_move_steps": {
             "symbol": "kDefaultMoveSteps",
@@ -39,16 +51,6 @@ CONFIG_SCHEMA = {
         },
     },
     "homing": {
-        "enabled": {
-            "symbol": "kHomingEnabled",
-            "type": bool,
-        },
-        "step_delay_us": {
-            "symbol": "kHomingStepDelayUs",
-            "type": int,
-            "min": 50,
-            "max": 100000,
-        },
         "retract_steps": {
             "symbol": "kHomingRetractSteps",
             "type": int,
@@ -58,6 +60,16 @@ CONFIG_SCHEMA = {
             "symbol": "kHomingDirectionNegative",
             "type": bool,
         },
+        "double_tap_distance_mm": {
+            "symbol": "kHomingDoubleTapDistanceMm",
+            "type": int,
+            "min": 1,
+        },
+        "second_seek_delay_multiplier": {
+            "symbol": "kHomingSecondSeekDelayMultiplier",
+            "type": int,
+            "min": 1,
+        },
     },
     "tmc2209": {
         "uart_enabled": {
@@ -66,6 +78,18 @@ CONFIG_SCHEMA = {
         },
         "uart_baud": {
             "symbol": "kDriverUartBaud",
+            "type": int,
+            "min": 1,
+        },
+    },
+    "stepper_motor": {
+        "steps_per_revolution": {
+            "symbol": "kStepsPerRevolution",
+            "type": int,
+            "min": 1,
+        },
+        "full_stroke_steps_1x": {
+            "symbol": "kFullStrokeSteps1x",
             "type": int,
             "min": 1,
         },
@@ -191,6 +215,27 @@ def validate_and_resolve(data):
             validate_scalar(f"{section_name}.{key}", value, rules)
             resolved[rules["symbol"]] = value
 
+    if resolved["kMaximumPositionMm"] <= resolved["kMinimumPositionMm"]:
+        fail("motion.maximum_position must be greater than motion.minimum_position")
+
+    motor_section = data["stepper_motor"]
+    delay_map = motor_section.get("microsteps_delay")
+    if not isinstance(delay_map, dict):
+        fail("stepper_motor.microsteps_delay must be a mapping")
+
+    for microsteps in SUPPORTED_MICROSTEPS:
+        yaml_key = str(microsteps)
+        if yaml_key not in delay_map:
+            fail(f"Missing stepper_motor.microsteps_delay.{yaml_key} in conf.yaml")
+
+        value = delay_map[yaml_key]
+        validate_scalar(
+            f"stepper_motor.microsteps_delay.{yaml_key}",
+            value,
+            {"type": int, "min": 5, "max": 100000},
+        )
+        resolved[f"kStepDelayUsForMicrosteps{microsteps}"] = value
+
     return resolved
 
 
@@ -198,13 +243,31 @@ def cpp_type_and_value(symbol_name, value):
     if isinstance(value, bool):
         return "bool", "true" if value else "false"
 
-    if symbol_name in {"kDefaultCurrentMa", "kDefaultMicrosteps", "kHomingRetractSteps"}:
+    if symbol_name in {
+        "kDefaultCurrentMa",
+        "kDefaultMicrosteps",
+        "kHomingRetractSteps",
+        "kHomingDoubleTapDistanceMm",
+        "kHomingSecondSeekDelayMultiplier",
+        "kMinimumPositionMm",
+        "kMaximumPositionMm",
+        "kMaximumSpeedMmPerSec",
+        "kStepsPerRevolution",
+        "kFullStrokeSteps1x",
+    }:
         return "uint16_t", str(value)
 
     if symbol_name in {
-        "kDefaultStepDelayUs",
         "kDriverUartBaud",
-        "kHomingStepDelayUs",
+        "kStepDelayUsForMicrosteps1",
+        "kStepDelayUsForMicrosteps2",
+        "kStepDelayUsForMicrosteps4",
+        "kStepDelayUsForMicrosteps8",
+        "kStepDelayUsForMicrosteps16",
+        "kStepDelayUsForMicrosteps32",
+        "kStepDelayUsForMicrosteps64",
+        "kStepDelayUsForMicrosteps128",
+        "kStepDelayUsForMicrosteps256",
     }:
         return "uint32_t", str(value)
 
