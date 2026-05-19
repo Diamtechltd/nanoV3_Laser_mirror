@@ -13,7 +13,7 @@ The current firmware includes:
 
 - `platformio.ini` defines the PlatformIO environment, dependencies, and pre-build scripts.
 - `pins.yaml` is the editable source of truth for board pin inventory and active assignments.
-- `conf.yaml` is the editable source of truth for motion defaults, homing defaults, and TMC UART toggles.
+- `conf.yaml` is the editable source of truth for motion defaults, homing defaults, TMC UART toggles, and Arduino-side behavior flags.
 - `conf.yaml` also contains stroke calibration, position limits, aperture-iris calibration, speed limits, and per-microstep timing defaults.
 - `connection_diagram.txt` mirrors the active wiring in a quick human-readable format.
 - `scripts/generate_board_pins.py` validates `pins.yaml` and generates `GeneratedBoardPins.h` during build.
@@ -69,6 +69,9 @@ tmc2209:
   uart_enabled: true
   uart_baud: 57600
 
+arduino:
+  debug_mode: false
+
 motion:
   endstop_enabled: true
   minimum_position: 0
@@ -112,6 +115,7 @@ Section meanings:
 - `homing` controls retract behavior plus the double-tap homing verification pass.
 - `stepper_motor` describes the motor, measured steps/mm calibration, reference stroke calibration, and the per-microstep delay table used for normal motion timing.
 - `tmc2209` controls whether UART support is enabled and which baud rate is used for `PDN_UART`.
+- `arduino` controls firmware-local behavior flags such as boot-time debug verbosity.
 
 Timing behavior:
 
@@ -166,7 +170,9 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `H` homes toward the minimum endstop
 - `H <steps>` homes, verifies, and uses a one-shot retract override
 - `E` toggles endstop protection on or off for normal manual motion
+- `D` toggles runtime debug verbosity for move/homing chatter and TMC pulse diagnostics
 - status output now includes `speed limit us` and `est max mm/s` for timing visibility
+- `D` is session-only for now; boot default still comes from `arduino.debug_mode`
 
 Iris behavior:
 

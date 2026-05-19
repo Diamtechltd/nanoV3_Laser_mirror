@@ -5,7 +5,7 @@ aperture_iris:
 motion:
   endstop_enabled: true
   minimum_position: 0             # in mm
-  maximum_position: 22.24         # in mm
+  maximum_position: 22.23         # in mm
   maximum_speed: 50               # in mm/s
   default_current_ma: 140         # 140 mA is a good default for the this stepper motor.
   default_microsteps: 4

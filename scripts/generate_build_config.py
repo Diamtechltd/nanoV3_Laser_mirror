@@ -84,6 +84,12 @@ CONFIG_SCHEMA = {
             "min": 1,
         },
     },
+    "arduino": {
+        "debug_mode": {
+            "symbol": "kDebugMode",
+            "type": bool,
+        },
+    },
     "stepper_motor": {
         "steps_per_mm": {
             "symbol": "kStepsPerMmX1000",

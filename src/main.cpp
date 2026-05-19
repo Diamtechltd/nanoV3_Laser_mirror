@@ -60,6 +60,7 @@ HomingCycleState homingCycle;
 MoveContext moveContext;
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
+bool debugMode = driver_config::kDebugMode;
 bool endstopEnabled = driver_config::kEndstopEnabled;
 bool motionReady = true;
 bool tmcOk = false;
@@ -113,6 +114,8 @@ void printDivider() { Serial.println(F("----------------------------------------
 void resetMotionState() { motion = MotionState{}; }
 
 void resetMoveContext() { moveContext = MoveContext{}; }
+
+bool shouldPrintDebug() { return debugMode; }
 
 bool shouldHonorEndstop(MotionMode mode) {
   return mode == MotionMode::kHomingSeekInitial ||
@@ -329,7 +332,7 @@ void resetHomingCycle(unsigned long retractSteps) {
 }
 
 void printHomingVerificationSummary() {
-  if (!homingCycle.verificationReady) {
+  if (!homingCycle.verificationReady || !shouldPrintDebug()) {
     return;
   }
 
@@ -492,8 +495,10 @@ void finishMove(bool aborted, MotionAbortReason reason) {
     Serial.println(F(")."));
   } else {
     lastMotionAbort = MotionAbortReason::kNone;
-    Serial.println(finishedMode == MotionMode::kNormal ? F("Move done.")
-                                                       : F("Homing complete."));
+    if (shouldPrintDebug()) {
+      Serial.println(finishedMode == MotionMode::kNormal ? F("Move done.")
+                                                         : F("Homing complete."));
+    }
   }
 
   resetMotionState();
@@ -537,9 +542,11 @@ void finishMove(bool aborted, MotionAbortReason reason) {
     }
 
     disableDriver();
-    Serial.println(finishedMode == MotionMode::kNormal
-                       ? F("Driver disabled after move.")
-                       : F("Driver disabled after homing."));
+    if (shouldPrintDebug()) {
+      Serial.println(finishedMode == MotionMode::kNormal
+                         ? F("Driver disabled after move.")
+                         : F("Driver disabled after homing."));
+    }
   }
 
   if (!aborted && finishedMode == MotionMode::kHomingRetract &&
@@ -547,7 +554,9 @@ void finishMove(bool aborted, MotionAbortReason reason) {
     Serial.println(F("WARNING: Endstop still active after retract."));
   }
 
-  Serial.println();
+  if (shouldPrintDebug()) {
+    Serial.println();
+  }
 }
 
 bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
@@ -604,18 +613,24 @@ void startMove(long steps) {
     return;
   }
 
-  Serial.println();
-  Serial.print(F("Move "));
-  Serial.print(motion.logicalForward ? F("forward ") : F("backward "));
-  Serial.print(motion.totalSteps);
-  Serial.println(F(" steps"));
+  if (shouldPrintDebug()) {
+    Serial.println();
+    Serial.print(F("Move "));
+    Serial.print(motion.logicalForward ? F("forward ") : F("backward "));
+    Serial.print(motion.totalSteps);
+    Serial.println(F(" steps"));
+  }
 
   if (tmcOk) {
     motion.mscntBefore = tmc.microstepCounter();
-    Serial.print(F("MSCNT before: "));
-    Serial.println(motion.mscntBefore);
+    if (shouldPrintDebug()) {
+      Serial.print(F("MSCNT before: "));
+      Serial.println(motion.mscntBefore);
+    }
   } else {
-    Serial.println(F("UART offline: running STEP/DIR only."));
+    if (shouldPrintDebug()) {
+      Serial.println(F("UART offline: running STEP/DIR only."));
+    }
   }
 }
 
@@ -672,15 +687,23 @@ bool startSecondHomingSeek();
 
 void finishHomingWithoutRetract() {
   setKnownPositionToMinimum();
-  Serial.println(F("Endstop triggered."));
+  if (shouldPrintDebug()) {
+    Serial.println(F("Endstop triggered."));
+  }
   printHomingVerificationSummary();
-  Serial.println(F("No homing retract requested."));
+  if (shouldPrintDebug()) {
+    Serial.println(F("No homing retract requested."));
+  }
   disableDriver();
-  Serial.println(F("Homing complete."));
-  Serial.println(F("Driver disabled after homing."));
+  if (shouldPrintDebug()) {
+    Serial.println(F("Homing complete."));
+    Serial.println(F("Driver disabled after homing."));
+  }
   lastMotionAbort = MotionAbortReason::kNone;
   homingCycle.active = false;
-  Serial.println();
+  if (shouldPrintDebug()) {
+    Serial.println();
+  }
 }
 
 void startHomingRetract(unsigned long retractSteps) {
@@ -697,9 +720,11 @@ void startHomingRetract(unsigned long retractSteps) {
     return;
   }
 
-  Serial.print(F("Endstop triggered. Retracting "));
-  Serial.print(retractSteps);
-  Serial.println(F(" steps away from endstop."));
+  if (shouldPrintDebug()) {
+    Serial.print(F("Endstop triggered. Retracting "));
+    Serial.print(retractSteps);
+    Serial.println(F(" steps away from endstop."));
+  }
 }
 
 bool startDoubleTapAdvance() {
@@ -717,11 +742,13 @@ bool startDoubleTapAdvance() {
     return false;
   }
 
-  Serial.print(F("Endstop triggered. Advancing "));
-  printMilliMm(homingCycle.expectedSecondPassMilliMm);
-  Serial.print(F(" mm ("));
-  Serial.print(homingCycle.expectedSecondPassSteps);
-  Serial.println(F(" steps) for double-tap verification."));
+  if (shouldPrintDebug()) {
+    Serial.print(F("Endstop triggered. Advancing "));
+    printMilliMm(homingCycle.expectedSecondPassMilliMm);
+    Serial.print(F(" mm ("));
+    Serial.print(homingCycle.expectedSecondPassSteps);
+    Serial.println(F(" steps) for double-tap verification."));
+  }
   return true;
 }
 
@@ -740,9 +767,11 @@ bool startSecondHomingSeek() {
     return false;
   }
 
-  Serial.print(F("Second homing seek at "));
-  Serial.print(driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps));
-  Serial.println(F(" us per edge."));
+  if (shouldPrintDebug()) {
+    Serial.print(F("Second homing seek at "));
+    Serial.print(driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps));
+    Serial.println(F(" us per edge."));
+  }
   return true;
 }
 
@@ -791,16 +820,18 @@ void homeAperture(unsigned long retractSteps) {
     return;
   }
 
-  Serial.println();
-  Serial.print(F("Homing "));
-  Serial.print(homingForward ? F("forward") : F("backward"));
-  Serial.print(F(" at "));
-  Serial.print(driver_config::homingStepDelayUsFor(currentMicrosteps));
-  Serial.print(F(" us per edge. Double-tap distance: "));
-  printMilliMm(homingCycle.expectedSecondPassMilliMm);
-  Serial.print(F(" mm, second seek: "));
-  Serial.print(driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps));
-  Serial.println(F(" us per edge."));
+  if (shouldPrintDebug()) {
+    Serial.println();
+    Serial.print(F("Homing "));
+    Serial.print(homingForward ? F("forward") : F("backward"));
+    Serial.print(F(" at "));
+    Serial.print(driver_config::homingStepDelayUsFor(currentMicrosteps));
+    Serial.print(F(" us per edge. Double-tap distance: "));
+    printMilliMm(homingCycle.expectedSecondPassMilliMm);
+    Serial.print(F(" mm, second seek: "));
+    Serial.print(driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps));
+    Serial.println(F(" us per edge."));
+  }
 }
 
 void serviceMotion() {
@@ -854,13 +885,15 @@ void serviceMotion() {
 
   if (tmcOk && !motion.checkedFirstStep) {
     const uint16_t mscntAfterOne = tmc.microstepCounter();
-    Serial.print(F("MSCNT after 1 step: "));
-    Serial.println(mscntAfterOne);
+    if (shouldPrintDebug()) {
+      Serial.print(F("MSCNT after 1 step: "));
+      Serial.println(mscntAfterOne);
 
-    if (mscntAfterOne == motion.mscntBefore) {
-      Serial.println(F("WARNING: MSCNT did not change after first step."));
-    } else {
-      Serial.println(F("OK: TMC saw STEP pulse."));
+      if (mscntAfterOne == motion.mscntBefore) {
+        Serial.println(F("WARNING: MSCNT did not change after first step."));
+      } else {
+        Serial.println(F("OK: TMC saw STEP pulse."));
+      }
     }
 
     motion.checkedFirstStep = true;
@@ -901,6 +934,9 @@ void printStatus() {
 
   Serial.print(F("  endstop enabled  : "));
   Serial.println(endstopEnabled ? F("ON") : F("OFF"));
+
+  Serial.print(F("  debug mode       : "));
+  Serial.println(debugMode ? F("ON") : F("OFF"));
 
   Serial.print(F("  position known   : "));
   Serial.println(positionKnown ? F("YES") : F("NO"));
@@ -1037,6 +1073,7 @@ void printHelp() {
   Serial.println(F("  H              home with double-tap verification"));
   Serial.println(F("  H 50           home, verify, then retract 50 steps"));
   Serial.println(F("  E              toggle endstop protection"));
+  Serial.println(F("  D              toggle debug output"));
   Serial.println(F("  i 180          set run current to 180 mA RMS"));
   Serial.println(F("  u 4            set microsteps: 1,2,4,8,16,32,64,128,256"));
   Serial.println(F("  v 2000         set step delay in microseconds (temporary override)"));
@@ -1140,6 +1177,12 @@ void handleCommand(String line) {
       endstopEnabled = !endstopEnabled;
       Serial.print(F("Endstop protection: "));
       Serial.println(endstopEnabled ? F("ON") : F("OFF"));
+      break;
+
+    case 'D':
+      debugMode = !debugMode;
+      Serial.print(F("Debug mode: "));
+      Serial.println(debugMode ? F("ON") : F("OFF"));
       break;
 
     case 'i':

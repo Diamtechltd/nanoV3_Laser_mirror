@@ -11,6 +11,7 @@
 - `conf.yaml` also contains the `stepper_motor` motor profile, measured steps/mm calibration, reference stroke calibration, position limits, speed limits, and per-microstep timing defaults.
 - `conf.yaml` also carries double-tap homing verification settings under `homing`.
 - `conf.yaml` also carries linear aperture-iris calibration under `aperture_iris`.
+- `conf.yaml` also carries Arduino-local behavior flags under `arduino`, including boot debug verbosity.
 - `connection_diagram.txt` is the human-readable wiring reference and must match `pins.yaml` and endstop wiring semantics.
 - `scripts/generate_board_pins.py` validates `pins.yaml` and generates `GeneratedBoardPins.h` into the build directory.
 - `scripts/generate_build_config.py` validates `conf.yaml` and generates `GeneratedBuildConfig.h` into the build directory.
@@ -39,6 +40,7 @@
 - Homing seeks backward toward the minimum endstop and retracts forward away from it.
 - `H` performs double-tap homing: first touch zeroes, a configured forward clearance move happens, then a slower second touch verifies repeatability.
 - `E` toggles endstop protection for normal manual motion; it does not disable homing.
+- `D` toggles runtime debug verbosity; it is session-only and boots from `arduino.debug_mode`.
 - Normal step delay comes from the `stepper_motor.microsteps_delay` table for the active microstep setting.
 - Homing step delay is derived automatically as `2x` the normal delay for the active microstep setting.
 - Position becomes known after homing or after backing into the minimum endstop.
