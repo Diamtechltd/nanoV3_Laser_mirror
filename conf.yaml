@@ -1,5 +1,5 @@
 aperture_iris:
-  min_mm: 2.5 #fix endstop set to 1                       # in mm
+  min_mm: 1.5                     # in mm
   max_mm: 17                      # in mm
 
 motion:
