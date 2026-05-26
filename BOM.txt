@@ -11,7 +11,7 @@ High Precision Slider:The slider actuator offers a 30mm stroke, completing 5800 
 
 
 SCREWS:
-4 pcs - M3x14 V head (For Caseing)
+4 pcs - M3x20 V head (For Case) (Minimum 16mm)
 4 pcs - M1.4x5 Flat head (for stepper + endstop)
 2 pcs - M2x8 Flat head (for endstop)
 1 pcs - m2x10 Flat head (for crank - stepper side)
