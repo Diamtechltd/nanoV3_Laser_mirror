@@ -47,7 +47,7 @@
 - Absolute `g <mm>` moves use fixed-point `0.001 mm` tracking and obey configured min/max limits.
 - `stepper_motor.steps_per_mm` is the source of truth for raw travel conversion; `full_stroke_mm` and `full_stroke_steps_1x` are diagnostic cross-check values.
 - `A <mm>` maps user-facing aperture opening mm onto raw travel using the configured linear iris range.
-- `m <steps>` is always a literal signed step command and is not scaled by the default-distance baseline.
+- Raw step jogging uses `f <steps>` and `b <steps>`; no dedicated signed-step command exists.
 - Status output includes `speed limit us` and `est max mm/s` to explain the active timing cap.
 - UART support is optional and controlled through build-time config.
 

@@ -156,11 +156,9 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `f` moves forward using the default distance
 - `b` moves backward using the default distance
 - the no-argument `f` / `b` distance is computed as `default_move_steps * currentMicrosteps`
-- `f 2000` moves forward a specific step count
-- `b 2000` moves backward a specific step count
-- `m <steps>` moves a signed step count
-- `m 1000` means exactly `1000` steps forward at the current microstep mode
-- `m -1000` means exactly `1000` steps backward at the current microstep mode
+- `f 2000` moves forward a specific raw step count
+- `b 2000` moves backward a specific raw step count
+- raw step jogging is available through `f <steps>` and `b <steps>` only
 - `g <mm>` moves to an absolute position in millimeters from the minimum endstop origin
 - `A <mm>` moves to an absolute aperture opening in millimeters
 - `i <mA>` sets run current

@@ -366,9 +366,11 @@ void printApertureMoveResult() {
     return;
   }
 
-  Serial.print(F("Aperture requested : "));
-  printMilliMm(moveContext.requestedApertureMilliMm);
-  Serial.println(F(" mm"));
+  if (debugMode) {
+    Serial.print(F("Aperture requested : "));
+    printMilliMm(moveContext.requestedApertureMilliMm);
+    Serial.println(F(" mm"));
+  }
 
   Serial.print(F("Aperture result    : "));
   printMilliMm(travelPositionToApertureMilliMm(currentPositionMilliMm));
@@ -1062,17 +1064,13 @@ void printHelp() {
   Serial.println(F("  s              status"));
   Serial.println(F("  e              enable driver"));
   Serial.println(F("  d              disable driver"));
-  Serial.println(F("  f              move forward default distance"));
-  Serial.println(F("  b              move backward default distance"));
-  Serial.println(F("  f 2000         move forward 2000 steps"));
-  Serial.println(F("  b 2000         move backward 2000 steps"));
-  Serial.println(F("  m 1000         move signed steps"));
-  Serial.println(F("  m -1000        move signed steps backward"));
+  Serial.println(F("  f [steps]      forward: default distance or given steps"));
+  Serial.println(F("  b [steps]      backward: default distance or given steps"));
   Serial.println(F("  g 12.345       go to absolute position 12.345 mm"));
   Serial.println(F("  A 8.500        go to aperture opening 8.500 mm"));
   Serial.println(F("  H              home with double-tap verification"));
   Serial.println(F("  H 50           home, verify, then retract 50 steps"));
-  Serial.println(F("  E              toggle endstop protection"));
+  Serial.println(F("  E              toggle endstop"));
   Serial.println(F("  D              toggle debug output"));
   Serial.println(F("  i 180          set run current to 180 mA RMS"));
   Serial.println(F("  u 4            set microsteps: 1,2,4,8,16,32,64,128,256"));
@@ -1132,15 +1130,6 @@ void handleCommand(String line) {
     case 'b':
       resetMoveContext();
       startMove(arg.length() ? -value : -effectiveDefaultMoveSteps());
-      break;
-
-    case 'm':
-      resetMoveContext();
-      if (arg.length() == 0) {
-        Serial.println(F("Usage: m 1000 or m -1000"));
-      } else {
-        startMove(value);
-      }
       break;
 
     case 'g': {
