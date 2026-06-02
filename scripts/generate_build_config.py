@@ -89,6 +89,10 @@ CONFIG_SCHEMA = {
             "symbol": "kDebugMode",
             "type": bool,
         },
+        "save_config_to_eeprom": {
+            "symbol": "kSaveConfigToEeprom",
+            "type": bool,
+        },
     },
     "stepper_motor": {
         "steps_per_mm": {

@@ -23,6 +23,7 @@ tmc2209:
   uart_baud: 57600
 
 arduino:
+  name: "Aperture Driver #1"
   debug_mode: false
   save_config_to_eeprom: true
 

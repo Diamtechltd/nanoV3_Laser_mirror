@@ -27,6 +27,8 @@ constexpr int32_t kMaximumPositionMilliMm =
 constexpr uint16_t kMaximumSpeedMmPerSec =
     generated_build_config::kMaximumSpeedMmPerSec;
 constexpr bool kDebugMode = generated_build_config::kDebugMode;
+constexpr bool kSaveConfigToEeprom =
+    generated_build_config::kSaveConfigToEeprom;
 constexpr int32_t kApertureIrisMinMilliMm =
     generated_build_config::kApertureIrisMinMilliMm;
 constexpr int32_t kApertureIrisMaxMilliMm =

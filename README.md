@@ -20,7 +20,9 @@ The current firmware includes:
 - `scripts/generate_build_config.py` validates `conf.yaml` and generates `GeneratedBuildConfig.h` during build.
 - `include/BoardConfig.h` exposes board-level settings and reads generated pin constants.
 - `include/DriverConfig.h` wraps generated build-time defaults plus fixed hardware constants.
+- `include/PersistentConfig.h` defines the typed onboard-EEPROM runtime config record API.
 - `src/main.cpp` provides the serial command interface, motion logic, endstop protection, and homing flow.
+- `src/PersistentConfig.*` owns onboard EEPROM record validation, CRC checks, and byte-wise save/load helpers.
 - `src/Tmc2209Driver.*` contains UART-specific TMC2209 setup and status access.
 
 ## Build and run
@@ -70,12 +72,14 @@ tmc2209:
   uart_baud: 57600
 
 arduino:
+  name: "Aperture Driver #1"
   debug_mode: false
+  save_config_to_eeprom: true
 
 motion:
   endstop_enabled: true
   minimum_position: 0
-  maximum_position: 30
+  maximum_position: 22.23
   maximum_speed: 50
   default_current_ma: 140
   default_microsteps: 4
@@ -83,7 +87,7 @@ motion:
   auto_disable_after_move: true
 
 aperture_iris:
-  min_mm: 1
+  min_mm: 1.5
   max_mm: 17
 
 homing:
@@ -115,16 +119,25 @@ Section meanings:
 - `homing` controls retract behavior plus the double-tap homing verification pass.
 - `stepper_motor` describes the motor, measured steps/mm calibration, reference stroke calibration, and the per-microstep delay table used for normal motion timing.
 - `tmc2209` controls whether UART support is enabled and which baud rate is used for `PDN_UART`.
-- `arduino` controls firmware-local behavior flags such as boot-time debug verbosity.
+- `arduino` controls firmware-local behavior flags such as boot-time debug verbosity and whether runtime config save/load commands use onboard EEPROM.
 
 Timing behavior:
 
 - normal motion delay is auto-selected from `stepper_motor.microsteps_delay` using the active microstep setting
-- normal auto-selected delay is also clamped by `motion.maximum_speed` using the configured 30 mm stroke calibration
+- normal auto-selected delay is also clamped by `motion.maximum_speed`
 - homing delay is always derived as `2x` the normal delay for the active microstep setting
 - the second homing touch runs slower using `homing.second_seek_delay_multiplier`
 - `u <microsteps>` reapplies table-based timing automatically
-- `v <delay_us>` is a temporary runtime override until the next successful `u` command
+- `v <delay_us>` applies a manual runtime delay override until the next successful `u`, `reload`, or `reset defaults`
+- the current delay override can be persisted across reboot with `write memory`
+
+EEPROM persistence behavior:
+
+- when `arduino.save_config_to_eeprom` is `true`, the firmware can save runtime tunables into the MCU's built-in EEPROM
+- the saved record is a typed struct, not a text file
+- saved fields are endstop enable, debug mode, run current, microsteps, step delay override, and auto-disable
+- boot falls back to compile-time defaults if EEPROM is empty, corrupt, out of range, or incompatible
+- EEPROM is only written on explicit `write memory`, and changed bytes are updated with the Arduino EEPROM library
 
 Position behavior:
 
@@ -163,21 +176,27 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `A <mm>` moves to an absolute aperture opening in millimeters
 - `i <mA>` sets run current
 - `u <microsteps>` sets microsteps
-- `v <delay_us>` sets step delay temporarily
+- `v <delay_us>` sets a manual step delay override
 - `a` toggles auto-disable after each move
 - `H` homes toward the minimum endstop
 - `H <steps>` homes, verifies, and uses a one-shot retract override
 - `E` toggles endstop protection on or off for normal manual motion
 - `D` toggles runtime debug verbosity for move/homing chatter and TMC pulse diagnostics
+- `write memory` saves the current runtime config to onboard EEPROM
+- `reload` discards unsaved changes and reloads the saved EEPROM config, or compile-time defaults if EEPROM is invalid
+- `reset defaults` loads compile-time defaults into RAM and leaves them unsaved until `write memory`
+- `show memory` prints the currently saved EEPROM runtime config
+- `show defaults` prints the compile-time default runtime config derived from `conf.yaml`
 - status output now includes `speed limit us` and `est max mm/s` for timing visibility
-- `D` is session-only for now; boot default still comes from `arduino.debug_mode`
+- status output also reports config source, dirty state, and EEPROM load status
+- `D` and `v` change live behavior immediately and can be made persistent with `write memory`
 
 Iris behavior:
 
 - `g <mm>` stays raw carriage travel
 - `A <mm>` is the user-facing aperture-opening command
-- with the current config, `A 1.000` maps to travel `0.000 mm` and `A 17.000` maps to travel `30.000 mm`
-- after a successful `A` move, firmware prints the requested and resulting aperture opening size
+- with the current config, `A 1.500` maps to travel `0.000 mm` and `A 17.000` maps to travel `22.230 mm`
+- after a successful `A` move, firmware always prints the resulting aperture opening size, and prints the requested size only when debug mode is on
 
 ## Pin and config workflow
 

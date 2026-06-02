@@ -17,8 +17,10 @@
 - `scripts/generate_build_config.py` validates `conf.yaml` and generates `GeneratedBuildConfig.h` into the build directory.
 - `include/BoardConfig.h` consumes generated pin values and keeps only non-pin board settings.
 - `include/DriverConfig.h` wraps generated tunable defaults plus fixed non-user hardware constants.
+- `include/PersistentConfig.h` defines the typed onboard-EEPROM runtime config API.
 - `src/main.cpp` owns the user-facing serial command loop, motion state, endstop logic, and homing flow.
 - `src/main.cpp` also owns mm position tracking, raw absolute travel moves, and aperture-opening command handling.
+- `src/PersistentConfig.*` owns onboard EEPROM record layout, validation, CRC checks, and byte-wise save/load helpers only.
 - `src/Tmc2209Driver.*` owns TMC2209 UART-specific setup, readback, and status helpers only.
 
 ## Working rules
@@ -40,14 +42,16 @@
 - Homing seeks backward toward the minimum endstop and retracts forward away from it.
 - `H` performs double-tap homing: first touch zeroes, a configured forward clearance move happens, then a slower second touch verifies repeatability.
 - `E` toggles endstop protection for normal manual motion; it does not disable homing.
-- `D` toggles runtime debug verbosity; it is session-only and boots from `arduino.debug_mode`.
+- `D` toggles runtime debug verbosity; it boots from `arduino.debug_mode` and can be persisted with `write memory`.
 - Normal step delay comes from the `stepper_motor.microsteps_delay` table for the active microstep setting.
+- `v` applies a manual step-delay override; `u` clears it back to auto timing, and `write memory` can persist the current override.
 - Homing step delay is derived automatically as `2x` the normal delay for the active microstep setting.
 - Position becomes known after homing or after backing into the minimum endstop.
 - Absolute `g <mm>` moves use fixed-point `0.001 mm` tracking and obey configured min/max limits.
 - `stepper_motor.steps_per_mm` is the source of truth for raw travel conversion; `full_stroke_mm` and `full_stroke_steps_1x` are diagnostic cross-check values.
 - `A <mm>` maps user-facing aperture opening mm onto raw travel using the configured linear iris range.
 - Raw step jogging uses `f <steps>` and `b <steps>`; no dedicated signed-step command exists.
+- `write memory`, `reload`, `reset defaults`, `show memory`, and `show defaults` manage the typed onboard-EEPROM runtime config record.
 - Status output includes `speed limit us` and `est max mm/s` to explain the active timing cap.
 - UART support is optional and controlled through build-time config.
 

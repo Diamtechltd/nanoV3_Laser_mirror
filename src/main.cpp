@@ -2,6 +2,7 @@
 
 #include "BoardConfig.h"
 #include "DriverConfig.h"
+#include "PersistentConfig.h"
 #include "Tmc2209Driver.h"
 
 namespace {
@@ -19,6 +20,11 @@ enum class MotionMode : uint8_t {
   kHomingClearance,
   kHomingSeekVerify,
   kHomingRetract,
+};
+
+enum class RuntimeConfigSource : uint8_t {
+  kDefaults = 0,
+  kEeprom,
 };
 
 struct HomingCycleState {
@@ -65,12 +71,106 @@ bool endstopEnabled = driver_config::kEndstopEnabled;
 bool motionReady = true;
 bool tmcOk = false;
 bool positionKnown = false;
+bool runtimeConfigDirty = false;
+bool savedRuntimeConfigValid = false;
 
 uint16_t runCurrentMa = driver_config::kDefaultCurrentMa;
 uint16_t currentMicrosteps = driver_config::kDefaultMicrosteps;
+uint32_t stepDelayOverrideUs = persistent_config::kNoStepDelayOverrideUs;
 uint32_t stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
 MotionAbortReason lastMotionAbort = MotionAbortReason::kNone;
 int32_t currentPositionMilliMm = driver_config::minimumPositionMilliMm();
+RuntimeConfigSource runtimeConfigSource = RuntimeConfigSource::kDefaults;
+persistent_config::LoadStatus lastRuntimeConfigLoadStatus =
+    persistent_config::LoadStatus::kEmpty;
+persistent_config::RuntimeConfig savedRuntimeConfig{};
+
+bool isPersistenceEnabled() { return driver_config::kSaveConfigToEeprom; }
+
+bool isStepDelayOverrideActive() {
+  return stepDelayOverrideUs != persistent_config::kNoStepDelayOverrideUs;
+}
+
+persistent_config::RuntimeConfig makeDefaultRuntimeConfig() {
+  persistent_config::RuntimeConfig config{};
+  config.endstopEnabled = driver_config::kEndstopEnabled;
+  config.debugMode = driver_config::kDebugMode;
+  config.autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
+  config.runCurrentMa = driver_config::kDefaultCurrentMa;
+  config.microsteps = driver_config::kDefaultMicrosteps;
+  config.stepDelayOverrideUs = persistent_config::kNoStepDelayOverrideUs;
+  return config;
+}
+
+persistent_config::RuntimeConfig captureRuntimeConfig() {
+  persistent_config::RuntimeConfig config{};
+  config.endstopEnabled = endstopEnabled;
+  config.debugMode = debugMode;
+  config.autoDisableAfterMove = autoDisableAfterMove;
+  config.runCurrentMa = runCurrentMa;
+  config.microsteps = currentMicrosteps;
+  config.stepDelayOverrideUs = stepDelayOverrideUs;
+  return config;
+}
+
+uint32_t effectiveStepDelayUsForConfig(
+    const persistent_config::RuntimeConfig& config) {
+  return config.stepDelayOverrideUs == persistent_config::kNoStepDelayOverrideUs
+             ? driver_config::effectiveNormalStepDelayUsFor(config.microsteps)
+             : config.stepDelayOverrideUs;
+}
+
+void refreshStepDelayUsFromCurrentSettings() {
+  stepDelayUs = isStepDelayOverrideActive()
+                    ? stepDelayOverrideUs
+                    : driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
+}
+
+void applyRuntimeConfigLocally(const persistent_config::RuntimeConfig& config) {
+  endstopEnabled = config.endstopEnabled;
+  debugMode = config.debugMode;
+  autoDisableAfterMove = config.autoDisableAfterMove;
+  runCurrentMa = config.runCurrentMa;
+  currentMicrosteps = config.microsteps;
+  stepDelayOverrideUs = config.stepDelayOverrideUs;
+  refreshStepDelayUsFromCurrentSettings();
+}
+
+void updateRuntimeConfigDirtyFromBaseline() {
+  if (!isPersistenceEnabled()) {
+    runtimeConfigDirty = false;
+    return;
+  }
+
+  const persistent_config::RuntimeConfig currentConfig = captureRuntimeConfig();
+  if (savedRuntimeConfigValid) {
+    runtimeConfigDirty = !persistent_config::runtimeConfigsEqual(
+        currentConfig, savedRuntimeConfig);
+    return;
+  }
+
+  runtimeConfigDirty = !persistent_config::runtimeConfigsEqual(
+      currentConfig, makeDefaultRuntimeConfig());
+}
+
+bool refreshSavedRuntimeConfigFromEeprom() {
+  if (!isPersistenceEnabled()) {
+    savedRuntimeConfigValid = false;
+    return false;
+  }
+
+  const persistent_config::LoadResult loadResult =
+      persistent_config::loadRuntimeConfig();
+  lastRuntimeConfigLoadStatus = loadResult.status;
+  if (loadResult.status != persistent_config::LoadStatus::kLoaded) {
+    savedRuntimeConfigValid = false;
+    return false;
+  }
+
+  savedRuntimeConfig = loadResult.config;
+  savedRuntimeConfigValid = true;
+  return true;
+}
 
 bool hasReachedMillis(unsigned long now, unsigned long target) {
   return static_cast<long>(now - target) >= 0;
@@ -377,6 +477,103 @@ void printApertureMoveResult() {
   Serial.println(F(" mm"));
 }
 
+const __FlashStringHelper* runtimeConfigSourceText(RuntimeConfigSource source) {
+  switch (source) {
+    case RuntimeConfigSource::kDefaults:
+      return F("DEFAULTS");
+    case RuntimeConfigSource::kEeprom:
+      return F("EEPROM");
+  }
+
+  return F("UNKNOWN");
+}
+
+const __FlashStringHelper* runtimeConfigLoadStatusText(
+    persistent_config::LoadStatus status) {
+  switch (status) {
+    case persistent_config::LoadStatus::kLoaded:
+      return F("loaded");
+    case persistent_config::LoadStatus::kEmpty:
+      return F("empty");
+    case persistent_config::LoadStatus::kInvalidMagic:
+      return F("invalid magic");
+    case persistent_config::LoadStatus::kVersionMismatch:
+      return F("version mismatch");
+    case persistent_config::LoadStatus::kCrcMismatch:
+      return F("crc mismatch");
+    case persistent_config::LoadStatus::kValueOutOfRange:
+      return F("value out of range");
+    case persistent_config::LoadStatus::kStorageTooSmall:
+      return F("storage too small");
+  }
+
+  return F("unknown");
+}
+
+void printStepDelayOverrideValue(uint32_t stepDelayOverride) {
+  if (stepDelayOverride == persistent_config::kNoStepDelayOverrideUs) {
+    Serial.print(F("AUTO"));
+    return;
+  }
+
+  Serial.print(stepDelayOverride);
+  Serial.print(F(" us"));
+}
+
+void printRuntimeConfigSnapshot(const __FlashStringHelper* title,
+                                const persistent_config::RuntimeConfig& config) {
+  Serial.println();
+  Serial.println(title);
+  printDivider();
+
+  Serial.print(F("  endstop enabled  : "));
+  Serial.println(config.endstopEnabled ? F("ON") : F("OFF"));
+
+  Serial.print(F("  debug mode       : "));
+  Serial.println(config.debugMode ? F("ON") : F("OFF"));
+
+  Serial.print(F("  run current mA   : "));
+  Serial.println(config.runCurrentMa);
+
+  Serial.print(F("  microsteps       : "));
+  Serial.println(config.microsteps);
+
+  Serial.print(F("  delay override   : "));
+  printStepDelayOverrideValue(config.stepDelayOverrideUs);
+  Serial.println();
+
+  Serial.print(F("  effective delay  : "));
+  Serial.println(effectiveStepDelayUsForConfig(config));
+
+  Serial.print(F("  auto disable     : "));
+  Serial.println(config.autoDisableAfterMove ? F("ON") : F("OFF"));
+
+  printDivider();
+  Serial.println();
+}
+
+bool isMotionOrHomingActive() { return motion.active || homingCycle.active; }
+
+bool ensurePersistenceEnabledForCommand() {
+  if (isPersistenceEnabled()) {
+    return true;
+  }
+
+  Serial.println(F("EEPROM persistence is disabled in conf.yaml."));
+  return false;
+}
+
+bool ensurePersistenceCommandIdle(const __FlashStringHelper* action) {
+  if (!isMotionOrHomingActive()) {
+    return true;
+  }
+
+  Serial.print(F("Refusing "));
+  Serial.print(action);
+  Serial.println(F(": motion or homing is active."));
+  return false;
+}
+
 const __FlashStringHelper* motionAbortReasonText(MotionAbortReason reason) {
   switch (reason) {
     case MotionAbortReason::kNone:
@@ -434,16 +631,36 @@ void printMicrostepRaw() {
   Serial.println(tmc.libraryMicrosteps());
 }
 
-bool setMicrosteps(uint16_t microsteps) {
+Tmc2209Driver::MicrostepStatus applyMicrostepsSetting(uint16_t microsteps) {
   const Tmc2209Driver::MicrostepStatus status = tmc.setMicrosteps(microsteps);
   if (status == Tmc2209Driver::MicrostepStatus::kInvalidMicrostepValue) {
+    return status;
+  }
+
+  currentMicrosteps = microsteps;
+  if (status == Tmc2209Driver::MicrostepStatus::kOk) {
+    const uint16_t realMicrosteps = tmc.getRealMicrosteps();
+    if (realMicrosteps != 0) {
+      currentMicrosteps = realMicrosteps;
+    }
+  }
+  refreshStepDelayUsFromCurrentSettings();
+  tmcOk = tmc.isConnected();
+  return status;
+}
+
+bool setMicrosteps(uint16_t microsteps) {
+  const uint32_t previousStepDelayOverrideUs = stepDelayOverrideUs;
+  stepDelayOverrideUs = persistent_config::kNoStepDelayOverrideUs;
+  const Tmc2209Driver::MicrostepStatus status =
+      applyMicrostepsSetting(microsteps);
+  if (status == Tmc2209Driver::MicrostepStatus::kInvalidMicrostepValue) {
+    stepDelayOverrideUs = previousStepDelayOverrideUs;
+    refreshStepDelayUsFromCurrentSettings();
     Serial.println(F("ERROR: Invalid microstep value."));
     Serial.println(F("Allowed: 1, 2, 4, 8, 16, 32, 64, 128, 256"));
     return false;
   }
-
-  currentMicrosteps = microsteps;
-  stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
 
   if (status == Tmc2209Driver::MicrostepStatus::kOk) {
     Serial.print(F("Microsteps set to: "));
@@ -453,7 +670,6 @@ bool setMicrosteps(uint16_t microsteps) {
     Serial.print(F(" us, homing delay: "));
     Serial.print(driver_config::homingStepDelayUsFor(currentMicrosteps));
     Serial.println(F(" us."));
-    tmcOk = tmc.isConnected();
     return true;
   }
 
@@ -465,8 +681,25 @@ bool setMicrosteps(uint16_t microsteps) {
   Serial.print(F(" us, homing delay: "));
   Serial.print(driver_config::homingStepDelayUsFor(currentMicrosteps));
   Serial.println(F(" us."));
-  tmcOk = tmc.isConnected();
-  return false;
+  return true;
+}
+
+void reapplyRuntimeConfigToDriver(const __FlashStringHelper* action) {
+  if (!tmcOk) {
+    return;
+  }
+
+  tmc.setRunCurrent(runCurrentMa);
+  const Tmc2209Driver::MicrostepStatus status =
+      applyMicrostepsSetting(currentMicrosteps);
+  if (status == Tmc2209Driver::MicrostepStatus::kOk) {
+    return;
+  }
+
+  Serial.print(F("WARNING: "));
+  Serial.print(action);
+  Serial.print(F(" applied locally only: "));
+  Serial.println(microstepStatusText(status));
 }
 
 void printMotionProgress() {
@@ -940,6 +1173,23 @@ void printStatus() {
   Serial.print(F("  debug mode       : "));
   Serial.println(debugMode ? F("ON") : F("OFF"));
 
+  Serial.print(F("  config source    : "));
+  Serial.println(runtimeConfigSourceText(runtimeConfigSource));
+
+  Serial.print(F("  config dirty     : "));
+  Serial.println(runtimeConfigDirty ? F("YES") : F("NO"));
+
+  Serial.print(F("  eeprom persist   : "));
+  Serial.println(isPersistenceEnabled() ? F("ENABLED") : F("DISABLED"));
+
+  if (isPersistenceEnabled()) {
+    Serial.print(F("  saved config     : "));
+    Serial.println(savedRuntimeConfigValid ? F("YES") : F("NO"));
+
+    Serial.print(F("  load status      : "));
+    Serial.println(runtimeConfigLoadStatusText(lastRuntimeConfigLoadStatus));
+  }
+
   Serial.print(F("  position known   : "));
   Serial.println(positionKnown ? F("YES") : F("NO"));
 
@@ -1025,6 +1275,10 @@ void printStatus() {
   Serial.print(F("  step delay us    : "));
   Serial.println(stepDelayUs);
 
+  Serial.print(F("  delay override   : "));
+  printStepDelayOverrideValue(stepDelayOverrideUs);
+  Serial.println();
+
   Serial.print(F("  speed limit us   : "));
   Serial.println(driver_config::speedLimitedStepDelayUsFor(currentMicrosteps));
 
@@ -1068,20 +1322,156 @@ void printHelp() {
   Serial.println(F("  b [steps]      backward: default distance or given steps"));
   Serial.println(F("  g 12.345       go to absolute position 12.345 mm"));
   Serial.println(F("  A 8.500        go to aperture opening 8.500 mm"));
-  Serial.println(F("  H              home with double-tap verification"));
-  Serial.println(F("  H 50           home, verify, then retract 50 steps"));
+  Serial.println(F("  H [steps]      home Motor, optionally retract by given steps"));
   Serial.println(F("  E              toggle endstop"));
   Serial.println(F("  D              toggle debug output"));
   Serial.println(F("  i 180          set run current to 180 mA RMS"));
   Serial.println(F("  u 4            set microsteps: 1,2,4,8,16,32,64,128,256"));
-  Serial.println(F("  v 2000         set step delay in microseconds (temporary override)"));
+  Serial.println(F("  v 2000         set step delay override in microseconds"));
   Serial.println(F("  a              toggle auto-disable after move"));
+  Serial.println(F("  write memory   save current runtime config to EEPROM"));
+  Serial.println(F("  reload         discard unsaved changes and reload EEPROM"));
+  Serial.println(F("  reset defaults load compile-time defaults into RAM"));
+  Serial.println(F("  show memory    print saved EEPROM runtime config"));
+  Serial.println(F("  show defaults  print compile-time default runtime config"));
   Serial.println();
+}
+
+void printRuntimeConfigStartupSummary() {
+  if (!isPersistenceEnabled()) {
+    Serial.println(F("EEPROM persistence disabled; using compile-time defaults."));
+    return;
+  }
+
+  if (savedRuntimeConfigValid) {
+    Serial.println(F("Loaded runtime config from EEPROM."));
+    return;
+  }
+
+  if (lastRuntimeConfigLoadStatus == persistent_config::LoadStatus::kEmpty) {
+    Serial.println(F("No saved EEPROM config; using compile-time defaults."));
+    return;
+  }
+
+  Serial.print(F("EEPROM config invalid ("));
+  Serial.print(runtimeConfigLoadStatusText(lastRuntimeConfigLoadStatus));
+  Serial.println(F("); using compile-time defaults."));
+}
+
+void loadRuntimeConfigAtBoot() {
+  applyRuntimeConfigLocally(makeDefaultRuntimeConfig());
+  runtimeConfigSource = RuntimeConfigSource::kDefaults;
+  runtimeConfigDirty = false;
+  savedRuntimeConfigValid = false;
+  lastRuntimeConfigLoadStatus = persistent_config::LoadStatus::kEmpty;
+
+  if (refreshSavedRuntimeConfigFromEeprom()) {
+    applyRuntimeConfigLocally(savedRuntimeConfig);
+    runtimeConfigSource = RuntimeConfigSource::kEeprom;
+  }
+}
+
+void showSavedRuntimeConfig() {
+  if (!ensurePersistenceEnabledForCommand()) {
+    return;
+  }
+
+  if (!refreshSavedRuntimeConfigFromEeprom()) {
+    Serial.print(F("No valid saved EEPROM config ("));
+    Serial.print(runtimeConfigLoadStatusText(lastRuntimeConfigLoadStatus));
+    Serial.println(F(")."));
+    return;
+  }
+
+  printRuntimeConfigSnapshot(F("Saved EEPROM Runtime Config"), savedRuntimeConfig);
+}
+
+void showDefaultRuntimeConfig() {
+  printRuntimeConfigSnapshot(F("Compile-Time Default Runtime Config"),
+                             makeDefaultRuntimeConfig());
+}
+
+void writeRuntimeConfigToEeprom() {
+  if (!ensurePersistenceEnabledForCommand() ||
+      !ensurePersistenceCommandIdle(F("write memory"))) {
+    return;
+  }
+
+  const persistent_config::RuntimeConfig currentConfig = captureRuntimeConfig();
+  if (!persistent_config::saveRuntimeConfig(currentConfig)) {
+    Serial.println(F("ERROR: Failed to save runtime config to EEPROM."));
+    return;
+  }
+
+  savedRuntimeConfig = currentConfig;
+  savedRuntimeConfigValid = true;
+  runtimeConfigSource = RuntimeConfigSource::kEeprom;
+  lastRuntimeConfigLoadStatus = persistent_config::LoadStatus::kLoaded;
+  runtimeConfigDirty = false;
+  Serial.println(F("Runtime config saved to EEPROM."));
+}
+
+void reloadRuntimeConfig() {
+  if (!ensurePersistenceEnabledForCommand() ||
+      !ensurePersistenceCommandIdle(F("reload"))) {
+    return;
+  }
+
+  if (refreshSavedRuntimeConfigFromEeprom()) {
+    applyRuntimeConfigLocally(savedRuntimeConfig);
+    runtimeConfigSource = RuntimeConfigSource::kEeprom;
+    reapplyRuntimeConfigToDriver(F("Reload"));
+    runtimeConfigDirty = false;
+    Serial.println(F("Reloaded runtime config from EEPROM."));
+    return;
+  }
+
+  applyRuntimeConfigLocally(makeDefaultRuntimeConfig());
+  runtimeConfigSource = RuntimeConfigSource::kDefaults;
+  runtimeConfigDirty = false;
+  reapplyRuntimeConfigToDriver(F("Reload"));
+  Serial.print(F("No valid EEPROM config ("));
+  Serial.print(runtimeConfigLoadStatusText(lastRuntimeConfigLoadStatus));
+  Serial.println(F("); reloaded compile-time defaults."));
+}
+
+void resetRuntimeConfigToDefaults() {
+  if (!ensurePersistenceEnabledForCommand() ||
+      !ensurePersistenceCommandIdle(F("reset defaults"))) {
+    return;
+  }
+
+  applyRuntimeConfigLocally(makeDefaultRuntimeConfig());
+  runtimeConfigSource = RuntimeConfigSource::kDefaults;
+  reapplyRuntimeConfigToDriver(F("Reset defaults"));
+  runtimeConfigDirty = true;
+  Serial.println(F("Loaded compile-time defaults into RAM. Run 'write memory' to save."));
 }
 
 void handleCommand(String line) {
   line.trim();
   if (line.length() == 0) {
+    return;
+  }
+
+  if (line == "write memory") {
+    writeRuntimeConfigToEeprom();
+    return;
+  }
+  if (line == "reload") {
+    reloadRuntimeConfig();
+    return;
+  }
+  if (line == "reset defaults") {
+    resetRuntimeConfigToDefaults();
+    return;
+  }
+  if (line == "show memory") {
+    showSavedRuntimeConfig();
+    return;
+  }
+  if (line == "show defaults") {
+    showDefaultRuntimeConfig();
     return;
   }
 
@@ -1166,12 +1556,14 @@ void handleCommand(String line) {
       endstopEnabled = !endstopEnabled;
       Serial.print(F("Endstop protection: "));
       Serial.println(endstopEnabled ? F("ON") : F("OFF"));
+      updateRuntimeConfigDirtyFromBaseline();
       break;
 
     case 'D':
       debugMode = !debugMode;
       Serial.print(F("Debug mode: "));
       Serial.println(debugMode ? F("ON") : F("OFF"));
+      updateRuntimeConfigDirtyFromBaseline();
       break;
 
     case 'i':
@@ -1187,6 +1579,7 @@ void handleCommand(String line) {
         Serial.print(F("Run current set to "));
         Serial.print(runCurrentMa);
         Serial.println(F(" mA RMS."));
+        updateRuntimeConfigDirtyFromBaseline();
       }
       break;
 
@@ -1194,7 +1587,9 @@ void handleCommand(String line) {
       if (arg.length() == 0) {
         Serial.println(F("Usage: u 1 / u 2 / u 4 / u 8 / u 16 ..."));
       } else {
-        setMicrosteps(static_cast<uint16_t>(value));
+        if (setMicrosteps(static_cast<uint16_t>(value))) {
+          updateRuntimeConfigDirtyFromBaseline();
+        }
       }
       break;
 
@@ -1202,12 +1597,14 @@ void handleCommand(String line) {
       if (value < 5 || value > 100000) {
         Serial.println(F("ERROR: step delay must be 5..100000 us."));
       } else {
-        stepDelayUs = static_cast<uint32_t>(value);
-        Serial.print(F("Step delay set to "));
+        stepDelayOverrideUs = static_cast<uint32_t>(value);
+        refreshStepDelayUsFromCurrentSettings();
+        Serial.print(F("Step delay override set to "));
         Serial.print(stepDelayUs);
         Serial.print(F(" us, approx "));
         Serial.print(1000000.0 / (2.0 * stepDelayUs));
         Serial.println(F(" steps/sec."));
+        updateRuntimeConfigDirtyFromBaseline();
       }
       break;
 
@@ -1215,6 +1612,7 @@ void handleCommand(String line) {
       autoDisableAfterMove = !autoDisableAfterMove;
       Serial.print(F("Auto-disable after move: "));
       Serial.println(autoDisableAfterMove ? F("ON") : F("OFF"));
+      updateRuntimeConfigDirtyFromBaseline();
       break;
 
     default:
@@ -1268,8 +1666,11 @@ void initTmcLayer() {
     return;
   }
 
-  currentMicrosteps = tmc.getRealMicrosteps();
-  stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
+  const uint16_t realMicrosteps = tmc.getRealMicrosteps();
+  if (realMicrosteps != 0) {
+    currentMicrosteps = realMicrosteps;
+  }
+  refreshStepDelayUsFromCurrentSettings();
   Serial.println(F("OK: TMC2209 detected over UART."));
 }
 
@@ -1286,7 +1687,10 @@ void setup() {
   Serial.println(F("Nano SuperMini aperture driver"));
   Serial.println();
 
+  loadRuntimeConfigAtBoot();
+  printRuntimeConfigStartupSummary();
   initTmcLayer();
+  updateRuntimeConfigDirtyFromBaseline();
   //printHelp();
   //printStatus();
 }
