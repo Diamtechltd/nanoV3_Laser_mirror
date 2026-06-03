@@ -1,12 +1,13 @@
 #include "PersistentConfig.h"
 
 #include <EEPROM.h>
+#include <string.h>
 
 namespace persistent_config {
 namespace {
 
 constexpr uint32_t kRecordMagic = 0x41505452UL;  // "APTR"
-constexpr uint16_t kRecordVersion = 1;
+constexpr uint16_t kRecordVersion = 2;
 
 struct __attribute__((packed)) StoredRuntimeConfigPayload {
   uint8_t endstopEnabled = 0;
@@ -15,6 +16,7 @@ struct __attribute__((packed)) StoredRuntimeConfigPayload {
   uint16_t runCurrentMa = 0;
   uint16_t microsteps = 0;
   uint32_t stepDelayOverrideUs = 0;
+  char arduinoName[kArduinoNameCapacity] = {};
 };
 
 struct __attribute__((packed)) StoredRuntimeConfigRecord {
@@ -59,6 +61,14 @@ bool isBlankRecord(const StoredRuntimeConfigRecord& record) {
   return allZero || allFF;
 }
 
+size_t boundedStringLength(const char* text, size_t capacity) {
+  size_t length = 0;
+  while (length < capacity && text[length] != '\0') {
+    ++length;
+  }
+  return length;
+}
+
 RuntimeConfig runtimeConfigFromPayload(const StoredRuntimeConfigPayload& payload) {
   RuntimeConfig config{};
   config.endstopEnabled = payload.endstopEnabled != 0;
@@ -67,6 +77,7 @@ RuntimeConfig runtimeConfigFromPayload(const StoredRuntimeConfigPayload& payload
   config.runCurrentMa = payload.runCurrentMa;
   config.microsteps = payload.microsteps;
   config.stepDelayOverrideUs = payload.stepDelayOverrideUs;
+  memcpy(config.arduinoName, payload.arduinoName, sizeof(config.arduinoName));
   return config;
 }
 
@@ -78,6 +89,7 @@ StoredRuntimeConfigPayload payloadFromRuntimeConfig(const RuntimeConfig& config)
   payload.runCurrentMa = config.runCurrentMa;
   payload.microsteps = config.microsteps;
   payload.stepDelayOverrideUs = config.stepDelayOverrideUs;
+  memcpy(payload.arduinoName, config.arduinoName, sizeof(payload.arduinoName));
   return payload;
 }
 
@@ -94,7 +106,8 @@ bool runtimeConfigsEqual(const RuntimeConfig& left, const RuntimeConfig& right) 
          left.autoDisableAfterMove == right.autoDisableAfterMove &&
          left.runCurrentMa == right.runCurrentMa &&
          left.microsteps == right.microsteps &&
-         left.stepDelayOverrideUs == right.stepDelayOverrideUs;
+         left.stepDelayOverrideUs == right.stepDelayOverrideUs &&
+         strcmp(left.arduinoName, right.arduinoName) == 0;
 }
 
 bool isSupportedMicrosteps(uint16_t microsteps) {
@@ -123,10 +136,17 @@ bool isValidStepDelayOverrideUs(uint32_t stepDelayOverrideUs) {
          (stepDelayOverrideUs >= 5UL && stepDelayOverrideUs <= 100000UL);
 }
 
+bool isValidArduinoName(const char* arduinoName) {
+  const size_t length = boundedStringLength(arduinoName, kArduinoNameCapacity);
+  return length > 0 && length <= kMaxArduinoNameLength &&
+         arduinoName[length] == '\0';
+}
+
 bool isValidRuntimeConfig(const RuntimeConfig& config) {
   return isValidRunCurrentMa(config.runCurrentMa) &&
          isSupportedMicrosteps(config.microsteps) &&
-         isValidStepDelayOverrideUs(config.stepDelayOverrideUs);
+         isValidStepDelayOverrideUs(config.stepDelayOverrideUs) &&
+         isValidArduinoName(config.arduinoName);
 }
 
 LoadResult loadRuntimeConfig() {

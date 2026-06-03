@@ -18,8 +18,9 @@
 - `include/BoardConfig.h` consumes generated pin values and keeps only non-pin board settings.
 - `include/DriverConfig.h` wraps generated tunable defaults plus fixed non-user hardware constants.
 - `include/PersistentConfig.h` defines the typed onboard-EEPROM runtime config API.
-- `src/main.cpp` owns the user-facing serial command loop, motion state, endstop logic, and homing flow.
-- `src/main.cpp` also owns mm position tracking, raw absolute travel moves, and aperture-opening command handling.
+- `include/UserCommands.h` exposes the serial CLI entry points used by the firmware lifecycle.
+- `src/main.cpp` owns motion state, endstop logic, homing flow, mm position tracking, raw absolute travel moves, and aperture-opening command handling.
+- `src/user_commands.cpp` owns the user-facing serial command loop, prompts, help text, and mode-aware command dispatch.
 - `src/PersistentConfig.*` owns onboard EEPROM record layout, validation, CRC checks, and byte-wise save/load helpers only.
 - `src/Tmc2209Driver.*` owns TMC2209 UART-specific setup, readback, and status helpers only.
 
@@ -43,6 +44,10 @@
 - `H` performs double-tap homing: first touch zeroes, a configured forward clearance move happens, then a slower second touch verifies repeatability.
 - `E` toggles endstop protection for normal manual motion; it does not disable homing.
 - `D` toggles runtime debug verbosity; it boots from `arduino.debug_mode` and can be persisted with `write memory`.
+- `name` prints the active device name, and `name <new_name>` persists only the name to onboard EEPROM.
+- The serial CLI has `Normal` and `Config` modes with prompts `> ` and `config> `.
+- `config` enters Config mode; `exit` and `q` return to Normal mode.
+- `i` keeps its existing current-setting behavior, but is exposed through Config mode rather than Normal mode.
 - Normal step delay comes from the `stepper_motor.microsteps_delay` table for the active microstep setting.
 - `v` applies a manual step-delay override; `u` clears it back to auto timing, and `write memory` can persist the current override.
 - Homing step delay is derived automatically as `2x` the normal delay for the active microstep setting.
@@ -52,6 +57,8 @@
 - `A <mm>` maps user-facing aperture opening mm onto raw travel using the configured linear iris range.
 - Raw step jogging uses `f <steps>` and `b <steps>`; no dedicated signed-step command exists.
 - `write memory`, `reload`, `reset defaults`, `show memory`, and `show defaults` manage the typed onboard-EEPROM runtime config record.
+- `reboot` triggers an AVR watchdog reset, behaving like an MCU hard reset without external reset-control wiring.
+- `reboot` aborts any active move or homing cycle before resetting.
 - Status output includes `speed limit us` and `est max mm/s` to explain the active timing cap.
 - UART support is optional and controlled through build-time config.
 

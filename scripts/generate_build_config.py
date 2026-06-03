@@ -9,6 +9,7 @@ BUILD_DIR = Path(ENV.subst("$BUILD_DIR"))
 CONFIG_PATH = PROJECT_DIR / "conf.yaml"
 GENERATED_HEADER_PATH = BUILD_DIR / "GeneratedBuildConfig.h"
 SUPPORTED_MICROSTEPS = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+MAX_ARDUINO_NAME_LENGTH = 31
 
 CONFIG_SCHEMA = {
     "motion": {
@@ -85,6 +86,12 @@ CONFIG_SCHEMA = {
         },
     },
     "arduino": {
+        "name": {
+            "symbol": "kArduinoName",
+            "type": str,
+            "min_length": 1,
+            "max_length": MAX_ARDUINO_NAME_LENGTH,
+        },
         "debug_mode": {
             "symbol": "kDebugMode",
             "type": bool,
@@ -150,12 +157,29 @@ def parse_scalar(value):
             return value
 
 
+def strip_inline_comment(raw_line):
+    in_single_quote = False
+    in_double_quote = False
+
+    for index, char in enumerate(raw_line):
+        if char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            continue
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            continue
+        if char == "#" and not in_single_quote and not in_double_quote:
+            return raw_line[:index]
+
+    return raw_line
+
+
 def parse_simple_yaml(path):
     root = {}
     stack = [(-1, root)]
 
     for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        line = raw_line.split("#", 1)[0].rstrip()
+        line = strip_inline_comment(raw_line).rstrip()
         if not line.strip():
             continue
 
@@ -212,6 +236,15 @@ def load_config():
 
 def validate_scalar(path, value, rules):
     expected_type = rules["type"]
+    if expected_type is str:
+        if not isinstance(value, str):
+            fail(f"{path} must be a string")
+        if "min_length" in rules and len(value) < rules["min_length"]:
+            fail(f"{path} must be at least {rules['min_length']} characters long")
+        if "max_length" in rules and len(value) > rules["max_length"]:
+            fail(f"{path} must be at most {rules['max_length']} characters long")
+        return
+
     if expected_type is bool:
         if not isinstance(value, bool):
             fail(f"{path} must be true or false")
@@ -320,6 +353,16 @@ def validate_and_resolve(data):
 
 
 def cpp_type_and_value(symbol_name, value):
+    if isinstance(value, str):
+        escaped = (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\r", "\\r")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+        )
+        return "char", f'[] = "{escaped}"'
+
     if isinstance(value, bool):
         return "bool", "true" if value else "false"
 
@@ -378,7 +421,10 @@ def write_header(resolved_values):
 
     for symbol_name, value in resolved_values.items():
         cpp_type, cpp_value = cpp_type_and_value(symbol_name, value)
-        lines.append(f"constexpr {cpp_type} {symbol_name} = {cpp_value};")
+        if cpp_type == "char":
+            lines.append(f"constexpr {cpp_type} {symbol_name}{cpp_value};")
+        else:
+            lines.append(f"constexpr {cpp_type} {symbol_name} = {cpp_value};")
 
     lines.extend(["}", ""])
     GENERATED_HEADER_PATH.write_text("\n".join(lines), encoding="utf-8")

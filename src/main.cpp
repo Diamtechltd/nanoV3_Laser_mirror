@@ -1,59 +1,14 @@
 #include <Arduino.h>
+#include <avr/wdt.h>
 
 #include "BoardConfig.h"
 #include "DriverConfig.h"
 #include "PersistentConfig.h"
 #include "Tmc2209Driver.h"
+#include "UserCommandBindings.h"
+#include "UserCommands.h"
 
-namespace {
-
-enum class MotionAbortReason : uint8_t {
-  kNone = 0,
-  kTimeout,
-  kManualStop,
-  kEndstopTriggered,
-};
-
-enum class MotionMode : uint8_t {
-  kNormal = 0,
-  kHomingSeekInitial,
-  kHomingClearance,
-  kHomingSeekVerify,
-  kHomingRetract,
-};
-
-enum class RuntimeConfigSource : uint8_t {
-  kDefaults = 0,
-  kEeprom,
-};
-
-struct HomingCycleState {
-  bool active = false;
-  unsigned long plannedRetractSteps = 0;
-  unsigned long expectedSecondPassSteps = 0;
-  int32_t expectedSecondPassMilliMm = 0;
-  unsigned long actualSecondPassSteps = 0;
-  int32_t actualSecondPassMilliMm = 0;
-  bool verificationReady = false;
-};
-
-struct MotionState {
-  bool active = false;
-  bool stepPinHigh = false;
-  bool logicalForward = true;
-  bool physicalDir = true;
-  bool checkedFirstStep = false;
-  bool bounded = true;
-  unsigned long totalSteps = 0;
-  unsigned long completedSteps = 0;
-  unsigned long startMs = 0;
-  unsigned long nextStatusMs = 0;
-  unsigned long nextEdgeUs = 0;
-  uint16_t mscntBefore = 0;
-  uint32_t stepDelayUs = 0;
-  unsigned long plannedRetractSteps = 0;
-  MotionMode mode = MotionMode::kNormal;
-};
+namespace app {
 
 struct MoveContext {
   bool reportApertureOnCompletion = false;
@@ -64,6 +19,15 @@ Tmc2209Driver tmc;
 MotionState motion;
 HomingCycleState homingCycle;
 MoveContext moveContext;
+uint8_t bootResetFlags __attribute__((section(".noinit")));
+
+void disableWatchdogAtStartup() __attribute__((naked))
+    __attribute__((used)) __attribute__((section(".init3")));
+void disableWatchdogAtStartup() {
+  bootResetFlags = MCUSR;
+  MCUSR = 0;
+  wdt_disable();
+}
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
 bool debugMode = driver_config::kDebugMode;
@@ -81,6 +45,7 @@ uint32_t stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicro
 MotionAbortReason lastMotionAbort = MotionAbortReason::kNone;
 int32_t currentPositionMilliMm = driver_config::minimumPositionMilliMm();
 RuntimeConfigSource runtimeConfigSource = RuntimeConfigSource::kDefaults;
+CliMode cliMode = CliMode::Normal;
 persistent_config::LoadStatus lastRuntimeConfigLoadStatus =
     persistent_config::LoadStatus::kEmpty;
 persistent_config::RuntimeConfig savedRuntimeConfig{};
@@ -552,26 +517,28 @@ void printRuntimeConfigSnapshot(const __FlashStringHelper* title,
   Serial.println();
 }
 
-bool isMotionOrHomingActive() { return motion.active || homingCycle.active; }
+void finishMove(bool aborted, MotionAbortReason reason);
 
-bool ensurePersistenceEnabledForCommand() {
-  if (isPersistenceEnabled()) {
-    return true;
+void rebootBoard() {
+  if (motion.active || motion.stepPinHigh || homingCycle.active) {
+    Serial.println(F("Stopping motion..."));
   }
 
-  Serial.println(F("EEPROM persistence is disabled in conf.yaml."));
-  return false;
-}
-
-bool ensurePersistenceCommandIdle(const __FlashStringHelper* action) {
-  if (!isMotionOrHomingActive()) {
-    return true;
+  if (motion.active || motion.stepPinHigh) {
+    finishMove(true, MotionAbortReason::kManualStop);
+  } else if (homingCycle.active) {
+    homingCycle.active = false;
+    disableDriver();
   }
 
-  Serial.print(F("Refusing "));
-  Serial.print(action);
-  Serial.println(F(": motion or homing is active."));
-  return false;
+  Serial.println(F("Rebooting via watchdog reset..."));
+  // Avoid Serial.flush() here because CDC/USB-backed serial paths can block
+  // long enough to make reboot appear hung.
+  delay(100);
+  noInterrupts();
+  wdt_reset();
+  wdt_enable(WDTO_120MS);
+  while (1) {} // hold until watchdog triggers a reset
 }
 
 const __FlashStringHelper* motionAbortReasonText(MotionAbortReason reason) {
@@ -1311,32 +1278,6 @@ void printStatus() {
   Serial.println();
 }
 
-void printHelp() {
-  Serial.println();
-  Serial.println(F("Commands:"));
-  Serial.println(F("  h              help"));
-  Serial.println(F("  s              status"));
-  Serial.println(F("  e              enable driver"));
-  Serial.println(F("  d              disable driver"));
-  Serial.println(F("  f [steps]      forward: default distance or given steps"));
-  Serial.println(F("  b [steps]      backward: default distance or given steps"));
-  Serial.println(F("  g 12.345       go to absolute position 12.345 mm"));
-  Serial.println(F("  A 8.500        go to aperture opening 8.500 mm"));
-  Serial.println(F("  H [steps]      home Motor, optionally retract by given steps"));
-  Serial.println(F("  E              toggle endstop"));
-  Serial.println(F("  D              toggle debug output"));
-  Serial.println(F("  i 180          set run current to 180 mA RMS"));
-  Serial.println(F("  u 4            set microsteps: 1,2,4,8,16,32,64,128,256"));
-  Serial.println(F("  v 2000         set step delay override in microseconds"));
-  Serial.println(F("  a              toggle auto-disable after move"));
-  Serial.println(F("  write memory   save current runtime config to EEPROM"));
-  Serial.println(F("  reload         discard unsaved changes and reload EEPROM"));
-  Serial.println(F("  reset defaults load compile-time defaults into RAM"));
-  Serial.println(F("  show memory    print saved EEPROM runtime config"));
-  Serial.println(F("  show defaults  print compile-time default runtime config"));
-  Serial.println();
-}
-
 void printRuntimeConfigStartupSummary() {
   if (!isPersistenceEnabled()) {
     Serial.println(F("EEPROM persistence disabled; using compile-time defaults."));
@@ -1369,265 +1310,6 @@ void loadRuntimeConfigAtBoot() {
     applyRuntimeConfigLocally(savedRuntimeConfig);
     runtimeConfigSource = RuntimeConfigSource::kEeprom;
   }
-}
-
-void showSavedRuntimeConfig() {
-  if (!ensurePersistenceEnabledForCommand()) {
-    return;
-  }
-
-  if (!refreshSavedRuntimeConfigFromEeprom()) {
-    Serial.print(F("No valid saved EEPROM config ("));
-    Serial.print(runtimeConfigLoadStatusText(lastRuntimeConfigLoadStatus));
-    Serial.println(F(")."));
-    return;
-  }
-
-  printRuntimeConfigSnapshot(F("Saved EEPROM Runtime Config"), savedRuntimeConfig);
-}
-
-void showDefaultRuntimeConfig() {
-  printRuntimeConfigSnapshot(F("Compile-Time Default Runtime Config"),
-                             makeDefaultRuntimeConfig());
-}
-
-void writeRuntimeConfigToEeprom() {
-  if (!ensurePersistenceEnabledForCommand() ||
-      !ensurePersistenceCommandIdle(F("write memory"))) {
-    return;
-  }
-
-  const persistent_config::RuntimeConfig currentConfig = captureRuntimeConfig();
-  if (!persistent_config::saveRuntimeConfig(currentConfig)) {
-    Serial.println(F("ERROR: Failed to save runtime config to EEPROM."));
-    return;
-  }
-
-  savedRuntimeConfig = currentConfig;
-  savedRuntimeConfigValid = true;
-  runtimeConfigSource = RuntimeConfigSource::kEeprom;
-  lastRuntimeConfigLoadStatus = persistent_config::LoadStatus::kLoaded;
-  runtimeConfigDirty = false;
-  Serial.println(F("Runtime config saved to EEPROM."));
-}
-
-void reloadRuntimeConfig() {
-  if (!ensurePersistenceEnabledForCommand() ||
-      !ensurePersistenceCommandIdle(F("reload"))) {
-    return;
-  }
-
-  if (refreshSavedRuntimeConfigFromEeprom()) {
-    applyRuntimeConfigLocally(savedRuntimeConfig);
-    runtimeConfigSource = RuntimeConfigSource::kEeprom;
-    reapplyRuntimeConfigToDriver(F("Reload"));
-    runtimeConfigDirty = false;
-    Serial.println(F("Reloaded runtime config from EEPROM."));
-    return;
-  }
-
-  applyRuntimeConfigLocally(makeDefaultRuntimeConfig());
-  runtimeConfigSource = RuntimeConfigSource::kDefaults;
-  runtimeConfigDirty = false;
-  reapplyRuntimeConfigToDriver(F("Reload"));
-  Serial.print(F("No valid EEPROM config ("));
-  Serial.print(runtimeConfigLoadStatusText(lastRuntimeConfigLoadStatus));
-  Serial.println(F("); reloaded compile-time defaults."));
-}
-
-void resetRuntimeConfigToDefaults() {
-  if (!ensurePersistenceEnabledForCommand() ||
-      !ensurePersistenceCommandIdle(F("reset defaults"))) {
-    return;
-  }
-
-  applyRuntimeConfigLocally(makeDefaultRuntimeConfig());
-  runtimeConfigSource = RuntimeConfigSource::kDefaults;
-  reapplyRuntimeConfigToDriver(F("Reset defaults"));
-  runtimeConfigDirty = true;
-  Serial.println(F("Loaded compile-time defaults into RAM. Run 'write memory' to save."));
-}
-
-void handleCommand(String line) {
-  line.trim();
-  if (line.length() == 0) {
-    return;
-  }
-
-  if (line == "write memory") {
-    writeRuntimeConfigToEeprom();
-    return;
-  }
-  if (line == "reload") {
-    reloadRuntimeConfig();
-    return;
-  }
-  if (line == "reset defaults") {
-    resetRuntimeConfigToDefaults();
-    return;
-  }
-  if (line == "show memory") {
-    showSavedRuntimeConfig();
-    return;
-  }
-  if (line == "show defaults") {
-    showDefaultRuntimeConfig();
-    return;
-  }
-
-  const char cmd = line.charAt(0);
-  String arg = "";
-  if (line.length() > 1) {
-    arg = line.substring(1);
-    arg.trim();
-  }
-
-  const long value = arg.toInt();
-
-  switch (cmd) {
-    case 'h':
-    case '?':
-      printHelp();
-      break;
-
-    case 's':
-      printStatus();
-      break;
-
-    case 'e':
-      if (motion.active) {
-        Serial.println(F("Driver already enabled for active motion."));
-      } else {
-        enableDriver();
-        Serial.println(F("Driver enabled."));
-      }
-      break;
-
-    case 'd':
-      if (motion.active) {
-        finishMove(true, MotionAbortReason::kManualStop);
-      } else {
-        disableDriver();
-        Serial.println(F("Driver disabled."));
-      }
-      break;
-
-    case 'f':
-      resetMoveContext();
-      startMove(arg.length() ? value : effectiveDefaultMoveSteps());
-      break;
-
-    case 'b':
-      resetMoveContext();
-      startMove(arg.length() ? -value : -effectiveDefaultMoveSteps());
-      break;
-
-    case 'g': {
-      resetMoveContext();
-      int32_t targetPositionMilliMm = 0;
-      if (!parseMilliMm(arg, &targetPositionMilliMm)) {
-        Serial.println(F("Usage: g 12.345"));
-      } else {
-        startAbsolutePositionMove(targetPositionMilliMm);
-      }
-      break;
-    }
-
-    case 'A': {
-      int32_t targetApertureMilliMm = 0;
-      if (!parseMilliMm(arg, &targetApertureMilliMm)) {
-        Serial.println(F("Usage: A 8.500"));
-      } else {
-        startApertureOpeningMove(targetApertureMilliMm);
-      }
-      break;
-    }
-
-    case 'H':
-      if (arg.length() && value < 0) {
-        Serial.println(F("ERROR: homing retract must be 0 or greater."));
-      } else {
-        homeAperture(arg.length() ? static_cast<unsigned long>(value)
-                                  : driver_config::kHomingRetractSteps);
-      }
-      break;
-
-    case 'E':
-      endstopEnabled = !endstopEnabled;
-      Serial.print(F("Endstop protection: "));
-      Serial.println(endstopEnabled ? F("ON") : F("OFF"));
-      updateRuntimeConfigDirtyFromBaseline();
-      break;
-
-    case 'D':
-      debugMode = !debugMode;
-      Serial.print(F("Debug mode: "));
-      Serial.println(debugMode ? F("ON") : F("OFF"));
-      updateRuntimeConfigDirtyFromBaseline();
-      break;
-
-    case 'i':
-      if (value <= 0 || value > 500) {
-        Serial.println(F("ERROR: current must be 1..500 mA RMS."));
-        Serial.println(F("For a small motor, start around 120..220 mA."));
-      } else {
-        runCurrentMa = static_cast<uint16_t>(value);
-        if (tmcOk) {
-          tmc.setRunCurrent(runCurrentMa);
-        }
-
-        Serial.print(F("Run current set to "));
-        Serial.print(runCurrentMa);
-        Serial.println(F(" mA RMS."));
-        updateRuntimeConfigDirtyFromBaseline();
-      }
-      break;
-
-    case 'u':
-      if (arg.length() == 0) {
-        Serial.println(F("Usage: u 1 / u 2 / u 4 / u 8 / u 16 ..."));
-      } else {
-        if (setMicrosteps(static_cast<uint16_t>(value))) {
-          updateRuntimeConfigDirtyFromBaseline();
-        }
-      }
-      break;
-
-    case 'v':
-      if (value < 5 || value > 100000) {
-        Serial.println(F("ERROR: step delay must be 5..100000 us."));
-      } else {
-        stepDelayOverrideUs = static_cast<uint32_t>(value);
-        refreshStepDelayUsFromCurrentSettings();
-        Serial.print(F("Step delay override set to "));
-        Serial.print(stepDelayUs);
-        Serial.print(F(" us, approx "));
-        Serial.print(1000000.0 / (2.0 * stepDelayUs));
-        Serial.println(F(" steps/sec."));
-        updateRuntimeConfigDirtyFromBaseline();
-      }
-      break;
-
-    case 'a':
-      autoDisableAfterMove = !autoDisableAfterMove;
-      Serial.print(F("Auto-disable after move: "));
-      Serial.println(autoDisableAfterMove ? F("ON") : F("OFF"));
-      updateRuntimeConfigDirtyFromBaseline();
-      break;
-
-    default:
-      Serial.println(F("Unknown command. Type h for help."));
-      break;
-  }
-}
-
-void handleSerial() {
-  if (!Serial.available()) {
-    return;
-  }
-
-  const String line = Serial.readStringUntil('\n');
-  handleCommand(line);
 }
 
 void initPins() {
@@ -1674,28 +1356,39 @@ void initTmcLayer() {
   Serial.println(F("OK: TMC2209 detected over UART."));
 }
 
-}  // namespace
+}  // namespace app
 
 void setup() {
+  const bool watchdogResetDetected = (app::bootResetFlags & _BV(WDRF)) != 0;
+  MCUSR = 0;
+  wdt_disable();
+
   Serial.begin(board::kUsbSerialBaud);
   Serial.setTimeout(50);
   delay(500);
 
-  initPins();
+  app::initPins();
 
   Serial.println();
   Serial.println(F("Nano SuperMini aperture driver"));
+  app::printArduinoName();
   Serial.println();
 
-  loadRuntimeConfigAtBoot();
-  printRuntimeConfigStartupSummary();
-  initTmcLayer();
-  updateRuntimeConfigDirtyFromBaseline();
+  if (watchdogResetDetected) {
+    Serial.println(F("Reset cause: watchdog."));
+    Serial.println();
+  }
+
+  app::loadRuntimeConfigAtBoot();
+  app::printRuntimeConfigStartupSummary();
+  app::initTmcLayer();
+  app::updateRuntimeConfigDirtyFromBaseline();
   //printHelp();
   //printStatus();
+  app::printPrompt();
 }
 
 void loop() {
-  handleSerial();
-  serviceMotion();
+  app::handleSerial();
+  app::serviceMotion();
 }

@@ -21,7 +21,9 @@ The current firmware includes:
 - `include/BoardConfig.h` exposes board-level settings and reads generated pin constants.
 - `include/DriverConfig.h` wraps generated build-time defaults plus fixed hardware constants.
 - `include/PersistentConfig.h` defines the typed onboard-EEPROM runtime config record API.
-- `src/main.cpp` provides the serial command interface, motion logic, endstop protection, and homing flow.
+- `include/UserCommands.h` exposes the serial CLI entry points used by the firmware lifecycle.
+- `src/main.cpp` provides motion logic, endstop protection, homing flow, and runtime-state ownership.
+- `src/user_commands.cpp` provides the serial command interface, prompts, help text, and mode-aware command dispatch.
 - `src/PersistentConfig.*` owns onboard EEPROM record validation, CRC checks, and byte-wise save/load helpers.
 - `src/Tmc2209Driver.*` contains UART-specific TMC2209 setup and status access.
 
@@ -138,6 +140,7 @@ EEPROM persistence behavior:
 - saved fields are endstop enable, debug mode, run current, microsteps, step delay override, and auto-disable
 - boot falls back to compile-time defaults if EEPROM is empty, corrupt, out of range, or incompatible
 - EEPROM is only written on explicit `write memory`, and changed bytes are updated with the Arduino EEPROM library
+- unsaved RAM-only changes do not survive `reboot`
 
 Position behavior:
 
@@ -162,6 +165,9 @@ Position behavior:
 
 The firmware uses hardware `Serial` at `115200` for the USB terminal.
 
+- Normal mode uses the prompt `> `
+- `config` enters Config mode, which uses the prompt `config> `
+- `exit` and `q` leave Config mode and return to Normal mode
 - `h` or `?` prints help
 - `s` prints status
 - `e` enables the driver
@@ -174,7 +180,7 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - raw step jogging is available through `f <steps>` and `b <steps>` only
 - `g <mm>` moves to an absolute position in millimeters from the minimum endstop origin
 - `A <mm>` moves to an absolute aperture opening in millimeters
-- `i <mA>` sets run current
+- `i <mA>` is available in Config mode and sets run current
 - `u <microsteps>` sets microsteps
 - `v <delay_us>` sets a manual step delay override
 - `a` toggles auto-disable after each move
@@ -182,14 +188,20 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `H <steps>` homes, verifies, and uses a one-shot retract override
 - `E` toggles endstop protection on or off for normal manual motion
 - `D` toggles runtime debug verbosity for move/homing chatter and TMC pulse diagnostics
+- `name` prints the active device name
+- `name <new_name>` saves a new device name to onboard EEPROM without changing other saved settings
 - `write memory` saves the current runtime config to onboard EEPROM
 - `reload` discards unsaved changes and reloads the saved EEPROM config, or compile-time defaults if EEPROM is invalid
 - `reset defaults` loads compile-time defaults into RAM and leaves them unsaved until `write memory`
 - `show memory` prints the currently saved EEPROM runtime config
 - `show defaults` prints the compile-time default runtime config derived from `conf.yaml`
+- `reboot` resets the AVR through the watchdog and restarts through the normal boot path
+- `reboot` aborts any active move or homing cycle before resetting
 - status output now includes `speed limit us` and `est max mm/s` for timing visibility
 - status output also reports config source, dirty state, and EEPROM load status
 - `D` and `v` change live behavior immediately and can be made persistent with `write memory`
+- the active boot banner prints `name:<value>` after loading defaults or saved EEPROM config
+- `reboot` is a true MCU reset, but it is not a literal external power-cycle of attached hardware
 
 Iris behavior:
 

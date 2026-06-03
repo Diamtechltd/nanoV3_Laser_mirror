@@ -5,6 +5,8 @@
 namespace persistent_config {
 
 constexpr uint32_t kNoStepDelayOverrideUs = 0UL;
+constexpr size_t kArduinoNameCapacity = 32;
+constexpr size_t kMaxArduinoNameLength = kArduinoNameCapacity - 1;
 
 struct RuntimeConfig {
   bool endstopEnabled = false;
@@ -13,6 +15,7 @@ struct RuntimeConfig {
   uint16_t runCurrentMa = 0;
   uint16_t microsteps = 0;
   uint32_t stepDelayOverrideUs = kNoStepDelayOverrideUs;
+  char arduinoName[kArduinoNameCapacity] = {};
 };
 
 enum class LoadStatus : uint8_t {
@@ -34,6 +37,7 @@ bool runtimeConfigsEqual(const RuntimeConfig& left, const RuntimeConfig& right);
 bool isSupportedMicrosteps(uint16_t microsteps);
 bool isValidRunCurrentMa(uint16_t runCurrentMa);
 bool isValidStepDelayOverrideUs(uint32_t stepDelayOverrideUs);
+bool isValidArduinoName(const char* arduinoName);
 bool isValidRuntimeConfig(const RuntimeConfig& config);
 LoadResult loadRuntimeConfig();
 bool saveRuntimeConfig(const RuntimeConfig& config);
