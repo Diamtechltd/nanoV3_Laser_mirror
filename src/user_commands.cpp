@@ -118,7 +118,6 @@ void printNormalHelp() {
   Serial.println(F("  g [mm]       goto pos mm"));
   Serial.println(F("  aperture [mm] goto ap mm"));
   Serial.println(F("  H [steps]    home"));
-  Serial.println(F("  D            debug on / off"));
   Serial.println(F("  reboot       watchdog rst"));
   Serial.println();
 }
@@ -126,20 +125,21 @@ void printNormalHelp() {
 void printConfigHelp() {
   Serial.println();
   Serial.println(F("Config:"));
-  Serial.println(F("  help         show help"));
-  Serial.println(F("  exit         normal mode"));
-  Serial.println(F("  iris m/x v   iris min/max mm"));
-  Serial.println(F("  name X       stage dev name"));
-  Serial.println(F("  i [mA]       set mA RMS"));
-  Serial.println(F("  endstop      toggle endstop"));
-  Serial.println(F("  a            toggle driver auto-off"));
-  Serial.println(F("  u [step]     microsteps 1/2/4/...256"));
-  Serial.println(F("  v [μs]       step delay in μs"));
-  Serial.println(F("  write        save cfg"));
-  Serial.println(F("  reload       load saved cfg"));
-  Serial.println(F("  reset        load default cfg"));
-  Serial.println(F("  read         show saved cfg"));
-  Serial.println(F("  defaults     show def cfg"));
+  Serial.println(F("  help          show help"));
+  Serial.println(F("  exit          normal mode"));
+  Serial.println(F("  iris [m/x] [v]iris min/max mm"));
+  Serial.println(F("  name [string] rename device"));
+  Serial.println(F("  i [mA]        set mA RMS"));
+  Serial.println(F("  debug         toggle debug"));
+  Serial.println(F("  endstop       toggle endstop"));
+  Serial.println(F("  a             toggle driver auto-off"));
+  Serial.println(F("  u [step]      microsteps 1/2/4/...256"));
+  Serial.println(F("  v [μs]        step delay in μs"));
+  Serial.println(F("  write         save cfg"));
+  Serial.println(F("  reload        load saved cfg"));
+  Serial.println(F("  reset         load default cfg"));
+  Serial.println(F("  read          show saved cfg"));
+  Serial.println(F("  defaults      show def cfg"));
   Serial.println();
 }
 
@@ -429,8 +429,16 @@ void handleNormalModeCommand(const char* line) {
     printConfigOnlyHint();
     return;
   }
+  if (isExactCommand(line, "debug")) {
+    printConfigOnlyHint();
+    return;
+  }
   if (isExactCommand(line, "endstop")) {
     printConfigOnlyHint();
+    return;
+  }
+  if (isExactCommand(line, "con") || isExactCommand(line, "config")) {
+    enterConfigMode();
     return;
   }
   if (isExactCommand(line, "name")) {
@@ -441,15 +449,15 @@ void handleNormalModeCommand(const char* line) {
     rebootBoard();
     return;
   }
-  if (isExactCommand(line, "config")) {
-    enterConfigMode();
-    return;
-  }
 
   char command[16] = {};
   const char* arg = "";
   splitCommandArg(line, command, sizeof(command), &arg);
   if (strcmp(command, "iris") == 0) {
+    printConfigOnlyHint();
+    return;
+  }
+  if (strcmp(command, "debug") == 0) {
     printConfigOnlyHint();
     return;
   }
@@ -517,13 +525,6 @@ void handleNormalModeCommand(const char* line) {
       }
       break;
 
-    case 'D':
-      debugMode = !debugMode;
-      Serial.print(F("Debug mode: "));
-      Serial.println(debugMode ? F("ON") : F("OFF"));
-      updateRuntimeConfigDirtyFromBaseline();
-      break;
-
     case 'i':
       printConfigOnlyHint();
       break;
@@ -588,6 +589,13 @@ void handleConfigModeCommand(const char* line) {
     endstopEnabled = !endstopEnabled;
     Serial.print(F("Endstop protection: "));
     Serial.println(endstopEnabled ? F("ON") : F("OFF"));
+    updateRuntimeConfigDirtyFromBaseline();
+    return;
+  }
+  if (strcmp(command, "debug") == 0) {
+    debugMode = !debugMode;
+    Serial.print(F("Debug mode: "));
+    Serial.println(debugMode ? F("ON") : F("OFF"));
     updateRuntimeConfigDirtyFromBaseline();
     return;
   }

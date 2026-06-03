@@ -167,7 +167,7 @@ Position behavior:
 The firmware uses hardware `Serial` at `115200` for the USB terminal.
 
 - Normal mode uses the prompt `> `
-- `config` enters Config mode, which uses the prompt `config> `
+- `config` and `con` enter Config mode, which uses the prompt `config> `
 - `exit` and `q` leave Config mode and return to Normal mode
 - `h` or `?` prints help
 - `status` prints status
@@ -194,7 +194,7 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `H` homes toward the minimum endstop
 - `H <steps>` homes, verifies, and uses a one-shot retract override
 - `endstop` is available in Config mode and toggles endstop protection on or off for normal manual motion
-- `D` toggles runtime debug verbosity for move/homing chatter and TMC pulse diagnostics
+- `debug` is available in Config mode and toggles runtime debug verbosity for move/homing chatter and TMC pulse diagnostics
 - `write` is available in Config mode and saves the current runtime config to onboard EEPROM
 - `write` saves all staged config changes, including a staged rename and iris min/max
 - `reload` is available in Config mode and discards unsaved changes, including a staged rename and iris min/max, then reloads the saved EEPROM config or compile-time defaults if EEPROM is invalid
@@ -206,7 +206,7 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `driver off` aborts active motion before disabling the driver
 - status output now includes `speed limit us` and `est max mm/s` for timing visibility
 - status output also reports config source, dirty state, and EEPROM load status
-- `D` and `v` change live behavior immediately and can be made persistent with `write`
+- `debug` and `v` change live behavior immediately and can be made persistent with `write`
 - the active boot banner prints `name:<value>` after loading defaults or saved EEPROM config
 - `reboot` is a true MCU reset, but it is not a literal external power-cycle of attached hardware
 

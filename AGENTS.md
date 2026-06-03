@@ -43,10 +43,10 @@
 - Homing seeks backward toward the minimum endstop and retracts forward away from it.
 - `H` performs double-tap homing: first touch zeroes, a configured forward clearance move happens, then a slower second touch verifies repeatability.
 - `config> endstop` toggles endstop protection for normal manual motion; it does not disable homing.
-- `D` toggles runtime debug verbosity; it boots from `arduino.debug_mode` and can be persisted with `write`.
+- `config> debug` toggles runtime debug verbosity; it boots from `arduino.debug_mode` and can be persisted with `write`.
 - `name` prints the active device name in Normal mode, and `config> name <new_name>` stages a rename in RAM until `write`.
 - The serial CLI has `Normal` and `Config` modes with prompts `> ` and `config> `.
-- `config` enters Config mode; `exit` and `q` return to Normal mode.
+- `config` and `con` enter Config mode; `exit` and `q` return to Normal mode.
 - `driver` toggles the driver enable state in Normal mode; `driver on` and `driver off` set it explicitly.
 - `status` prints the current firmware status in Normal mode.
 - `i`, `u`, `v`, `iris`, `write`, `reload`, `reset defaults`, `read`, and `defaults` are exposed through Config mode rather than Normal mode.
