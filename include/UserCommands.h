@@ -6,7 +6,7 @@ namespace app {
 
 void printPrompt();
 void printHelp();
-void handleCommand(String line);
+void handleCommand(const char* line);
 void handleSerial();
 
 }  // namespace app

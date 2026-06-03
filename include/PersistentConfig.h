@@ -15,6 +15,8 @@ struct RuntimeConfig {
   uint16_t runCurrentMa = 0;
   uint16_t microsteps = 0;
   uint32_t stepDelayOverrideUs = kNoStepDelayOverrideUs;
+  int32_t apertureIrisMinMilliMm = 0;
+  int32_t apertureIrisMaxMilliMm = 0;
   char arduinoName[kArduinoNameCapacity] = {};
 };
 
@@ -37,6 +39,8 @@ bool runtimeConfigsEqual(const RuntimeConfig& left, const RuntimeConfig& right);
 bool isSupportedMicrosteps(uint16_t microsteps);
 bool isValidRunCurrentMa(uint16_t runCurrentMa);
 bool isValidStepDelayOverrideUs(uint32_t stepDelayOverrideUs);
+bool isValidApertureIrisBounds(int32_t apertureIrisMinMilliMm,
+                               int32_t apertureIrisMaxMilliMm);
 bool isValidArduinoName(const char* arduinoName);
 bool isValidRuntimeConfig(const RuntimeConfig& config);
 LoadResult loadRuntimeConfig();

@@ -42,7 +42,8 @@ constexpr uint16_t kHomingDoubleTapDistanceMm =
 constexpr uint16_t kHomingSecondSeekDelayMultiplier =
     generated_build_config::kHomingSecondSeekDelayMultiplier;
 
-// Keep UART optional so STEP/DIR motion can be brought up before UART wiring is finalized.
+// UART can still be compiled out, but motion stays locked unless UART is enabled
+// and communicating successfully.
 constexpr bool kDriverUartEnabled = generated_build_config::kDriverUartEnabled;
 constexpr unsigned long kDriverUartBaud = generated_build_config::kDriverUartBaud;
 

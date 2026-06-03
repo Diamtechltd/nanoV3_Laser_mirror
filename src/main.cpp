@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <avr/wdt.h>
+#include <string.h>
 
 #include "BoardConfig.h"
 #include "DriverConfig.h"
@@ -13,6 +14,13 @@ namespace app {
 struct MoveContext {
   bool reportApertureOnCompletion = false;
   int32_t requestedApertureMilliMm = 0;
+};
+
+enum class MotionReadyReason : uint8_t {
+  kReady = 0,
+  kUartDisabled,
+  kUartSetupFailed,
+  kUartProbeFailed,
 };
 
 Tmc2209Driver tmc;
@@ -31,8 +39,9 @@ void disableWatchdogAtStartup() {
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
 bool debugMode = driver_config::kDebugMode;
+bool driverEnabled = false;
 bool endstopEnabled = driver_config::kEndstopEnabled;
-bool motionReady = true;
+bool motionReady = false;
 bool tmcOk = false;
 bool positionKnown = false;
 bool runtimeConfigDirty = false;
@@ -42,10 +51,14 @@ uint16_t runCurrentMa = driver_config::kDefaultCurrentMa;
 uint16_t currentMicrosteps = driver_config::kDefaultMicrosteps;
 uint32_t stepDelayOverrideUs = persistent_config::kNoStepDelayOverrideUs;
 uint32_t stepDelayUs = driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps);
+int32_t apertureIrisMinMilliMm = driver_config::kApertureIrisMinMilliMm;
+int32_t apertureIrisMaxMilliMm = driver_config::kApertureIrisMaxMilliMm;
+char arduinoName[persistent_config::kArduinoNameCapacity] = {};
 MotionAbortReason lastMotionAbort = MotionAbortReason::kNone;
 int32_t currentPositionMilliMm = driver_config::minimumPositionMilliMm();
 RuntimeConfigSource runtimeConfigSource = RuntimeConfigSource::kDefaults;
 CliMode cliMode = CliMode::Normal;
+MotionReadyReason motionReadyReason = MotionReadyReason::kUartSetupFailed;
 persistent_config::LoadStatus lastRuntimeConfigLoadStatus =
     persistent_config::LoadStatus::kEmpty;
 persistent_config::RuntimeConfig savedRuntimeConfig{};
@@ -64,6 +77,11 @@ persistent_config::RuntimeConfig makeDefaultRuntimeConfig() {
   config.runCurrentMa = driver_config::kDefaultCurrentMa;
   config.microsteps = driver_config::kDefaultMicrosteps;
   config.stepDelayOverrideUs = persistent_config::kNoStepDelayOverrideUs;
+  config.apertureIrisMinMilliMm = driver_config::kApertureIrisMinMilliMm;
+  config.apertureIrisMaxMilliMm = driver_config::kApertureIrisMaxMilliMm;
+  strncpy(config.arduinoName, driver_config::kArduinoName,
+          sizeof(config.arduinoName) - 1);
+  config.arduinoName[sizeof(config.arduinoName) - 1] = '\0';
   return config;
 }
 
@@ -75,6 +93,9 @@ persistent_config::RuntimeConfig captureRuntimeConfig() {
   config.runCurrentMa = runCurrentMa;
   config.microsteps = currentMicrosteps;
   config.stepDelayOverrideUs = stepDelayOverrideUs;
+  config.apertureIrisMinMilliMm = apertureIrisMinMilliMm;
+  config.apertureIrisMaxMilliMm = apertureIrisMaxMilliMm;
+  memcpy(config.arduinoName, arduinoName, sizeof(config.arduinoName));
   return config;
 }
 
@@ -98,7 +119,14 @@ void applyRuntimeConfigLocally(const persistent_config::RuntimeConfig& config) {
   runCurrentMa = config.runCurrentMa;
   currentMicrosteps = config.microsteps;
   stepDelayOverrideUs = config.stepDelayOverrideUs;
+  apertureIrisMinMilliMm = config.apertureIrisMinMilliMm;
+  apertureIrisMaxMilliMm = config.apertureIrisMaxMilliMm;
+  memcpy(arduinoName, config.arduinoName, sizeof(arduinoName));
   refreshStepDelayUsFromCurrentSettings();
+}
+
+uint32_t currentApertureIrisStrokeMilliMm() {
+  return static_cast<uint32_t>(apertureIrisMaxMilliMm - apertureIrisMinMilliMm);
 }
 
 void updateRuntimeConfigDirtyFromBaseline() {
@@ -137,6 +165,45 @@ bool refreshSavedRuntimeConfigFromEeprom() {
   return true;
 }
 
+void setMotionReadyState(bool ready, MotionReadyReason reason) {
+  motionReady = ready;
+  motionReadyReason = reason;
+  if (!ready) {
+    tmcOk = false;
+  }
+}
+
+const __FlashStringHelper* motionReadyReasonText(MotionReadyReason reason) {
+  switch (reason) {
+    case MotionReadyReason::kReady:
+      return F("READY");
+    case MotionReadyReason::kUartDisabled:
+      return F("UART disabled");
+    case MotionReadyReason::kUartSetupFailed:
+      return F("UART setup failed");
+    case MotionReadyReason::kUartProbeFailed:
+      return F("UART probe failed");
+  }
+
+  return F("UNKNOWN");
+}
+
+void printMotionBlockedMessage() {
+  switch (motionReadyReason) {
+    case MotionReadyReason::kUartDisabled:
+      Serial.println(F("Refusing move: UART disabled."));
+      return;
+    case MotionReadyReason::kUartSetupFailed:
+      Serial.println(F("Refusing move: UART setup failed."));
+      return;
+    case MotionReadyReason::kUartProbeFailed:
+      Serial.println(F("Refusing move: UART offline."));
+      return;
+    case MotionReadyReason::kReady:
+      return;
+  }
+}
+
 bool hasReachedMillis(unsigned long now, unsigned long target) {
   return static_cast<long>(now - target) >= 0;
 }
@@ -166,11 +233,13 @@ bool motionDrivesIntoMinimumEndstop(MotionMode mode, bool logicalForward) {
 
 void enableDriver() {
   digitalWrite(board::kEnablePin, board::kEnableActiveLow ? LOW : HIGH);
+  driverEnabled = true;
   delay(5);
 }
 
 void disableDriver() {
   digitalWrite(board::kEnablePin, board::kEnableActiveLow ? HIGH : LOW);
+  driverEnabled = false;
   delay(5);
 }
 
@@ -205,12 +274,12 @@ int32_t clampPositionMilliMm(int32_t positionMilliMm) {
 }
 
 int32_t clampApertureMilliMm(int32_t apertureMilliMm) {
-  if (apertureMilliMm < driver_config::apertureIrisMinimumMilliMm()) {
-    return driver_config::apertureIrisMinimumMilliMm();
+  if (apertureMilliMm < apertureIrisMinMilliMm) {
+    return apertureIrisMinMilliMm;
   }
 
-  if (apertureMilliMm > driver_config::apertureIrisMaximumMilliMm()) {
-    return driver_config::apertureIrisMaximumMilliMm();
+  if (apertureMilliMm > apertureIrisMaxMilliMm) {
+    return apertureIrisMaxMilliMm;
   }
 
   return apertureMilliMm;
@@ -267,29 +336,29 @@ void printMilliMm(int32_t milliMm) {
 int32_t travelPositionToApertureMilliMm(int32_t travelPositionMilliMm) {
   const uint32_t motionStrokeMilliMm = driver_config::strokeMilliMm();
   if (motionStrokeMilliMm == 0) {
-    return driver_config::apertureIrisMinimumMilliMm();
+    return apertureIrisMinMilliMm;
   }
 
   const int32_t clampedTravelMilliMm = clampPositionMilliMm(travelPositionMilliMm);
   const uint32_t normalizedTravelMilliMm = static_cast<uint32_t>(
       clampedTravelMilliMm - driver_config::minimumPositionMilliMm());
-  const uint32_t apertureStrokeMilliMm = driver_config::apertureIrisStrokeMilliMm();
+  const uint32_t apertureStrokeMilliMm = currentApertureIrisStrokeMilliMm();
   const uint32_t apertureOffsetMilliMm =
       (normalizedTravelMilliMm * apertureStrokeMilliMm + (motionStrokeMilliMm / 2UL)) /
       motionStrokeMilliMm;
-  return clampApertureMilliMm(driver_config::apertureIrisMinimumMilliMm() +
+  return clampApertureMilliMm(apertureIrisMinMilliMm +
                               static_cast<int32_t>(apertureOffsetMilliMm));
 }
 
 int32_t apertureOpeningToTravelPositionMilliMm(int32_t apertureMilliMm) {
-  const uint32_t apertureStrokeMilliMm = driver_config::apertureIrisStrokeMilliMm();
+  const uint32_t apertureStrokeMilliMm = currentApertureIrisStrokeMilliMm();
   if (apertureStrokeMilliMm == 0) {
     return driver_config::minimumPositionMilliMm();
   }
 
   const int32_t clampedApertureMilliMm = clampApertureMilliMm(apertureMilliMm);
   const uint32_t normalizedApertureMilliMm = static_cast<uint32_t>(
-      clampedApertureMilliMm - driver_config::apertureIrisMinimumMilliMm());
+      clampedApertureMilliMm - apertureIrisMinMilliMm);
   const uint32_t motionStrokeMilliMm = driver_config::strokeMilliMm();
   const uint32_t travelOffsetMilliMm =
       (normalizedApertureMilliMm * motionStrokeMilliMm + (apertureStrokeMilliMm / 2UL)) /
@@ -298,32 +367,33 @@ int32_t apertureOpeningToTravelPositionMilliMm(int32_t apertureMilliMm) {
                               static_cast<int32_t>(travelOffsetMilliMm));
 }
 
-bool parseMilliMm(const String& text, int32_t* milliMmOut) {
+bool parseMilliMm(const char* text, int32_t* milliMmOut) {
   if (milliMmOut == nullptr) {
     return false;
   }
 
-  if (text.length() == 0) {
+  if (text == nullptr || text[0] == '\0') {
     return false;
   }
 
+  const size_t length = strlen(text);
   bool negative = false;
   size_t index = 0;
-  if (text.charAt(0) == '-') {
+  if (text[0] == '-') {
     negative = true;
     index = 1;
-  } else if (text.charAt(0) == '+') {
+  } else if (text[0] == '+') {
     index = 1;
   }
 
-  if (index >= static_cast<size_t>(text.length())) {
+  if (index >= length) {
     return false;
   }
 
   long whole = 0;
   bool hasWholeDigits = false;
-  while (index < static_cast<size_t>(text.length())) {
-    const char c = text.charAt(index);
+  while (index < length) {
+    const char c = text[index];
     if (c < '0' || c > '9') {
       break;
     }
@@ -333,11 +403,11 @@ bool parseMilliMm(const String& text, int32_t* milliMmOut) {
   }
 
   int32_t fraction = 0;
-  if (index < static_cast<size_t>(text.length()) && text.charAt(index) == '.') {
+  if (index < length && text[index] == '.') {
     ++index;
     int fractionDigits = 0;
-    while (index < static_cast<size_t>(text.length())) {
-      const char c = text.charAt(index);
+    while (index < length) {
+      const char c = text[index];
       if (c < '0' || c > '9' || fractionDigits >= 3) {
         break;
       }
@@ -352,13 +422,12 @@ bool parseMilliMm(const String& text, int32_t* milliMmOut) {
       fraction *= 10;
     }
 
-    while (index < static_cast<size_t>(text.length()) &&
-           text.charAt(index) >= '0' && text.charAt(index) <= '9') {
+    while (index < length && text[index] >= '0' && text[index] <= '9') {
       return false;
     }
   }
 
-  if (!hasWholeDigits || index != static_cast<size_t>(text.length())) {
+  if (!hasWholeDigits || index != length) {
     return false;
   }
 
@@ -384,6 +453,15 @@ void updateTrackedPositionFromSteps(bool logicalForward, unsigned long stepsTake
 void setKnownPositionToMinimum() {
   positionKnown = true;
   currentPositionMilliMm = driver_config::minimumPositionMilliMm();
+}
+
+bool zeroPositionFromBootEndstop() {
+  if (!isEndstopTriggered()) {
+    return false;
+  }
+
+  setKnownPositionToMinimum();
+  return true;
 }
 
 void resetHomingCycle(unsigned long retractSteps) {
@@ -513,6 +591,15 @@ void printRuntimeConfigSnapshot(const __FlashStringHelper* title,
   Serial.print(F("  auto disable     : "));
   Serial.println(config.autoDisableAfterMove ? F("ON") : F("OFF"));
 
+  Serial.print(F("  iris mm          : "));
+  printMilliMm(config.apertureIrisMinMilliMm);
+  Serial.print(F(".."));
+  printMilliMm(config.apertureIrisMaxMilliMm);
+  Serial.println();
+
+  Serial.print(F("  device name      : "));
+  Serial.println(config.arduinoName);
+
   printDivider();
   Serial.println();
 }
@@ -614,6 +701,34 @@ Tmc2209Driver::MicrostepStatus applyMicrostepsSetting(uint16_t microsteps) {
   refreshStepDelayUsFromCurrentSettings();
   tmcOk = tmc.isConnected();
   return status;
+}
+
+bool refreshMotionReadyFromUartProbe() {
+  if (!tmc.isEnabled()) {
+    setMotionReadyState(false, MotionReadyReason::kUartDisabled);
+    return false;
+  }
+
+  if (tmc.refreshConnection() != 0) {
+    setMotionReadyState(false, MotionReadyReason::kUartProbeFailed);
+    return false;
+  }
+
+  tmcOk = true;
+  if (!tmc.setRunCurrent(runCurrentMa)) {
+    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
+    return false;
+  }
+
+  const Tmc2209Driver::MicrostepStatus status =
+      applyMicrostepsSetting(currentMicrosteps);
+  if (status != Tmc2209Driver::MicrostepStatus::kOk) {
+    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
+    return false;
+  }
+
+  setMotionReadyState(true, MotionReadyReason::kReady);
+  return true;
 }
 
 bool setMicrosteps(uint16_t microsteps) {
@@ -764,8 +879,8 @@ void finishMove(bool aborted, MotionAbortReason reason) {
 bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
                  uint32_t requestedStepDelayUs, MotionMode mode,
                  bool allowTriggeredStart) {
-  if (!motionReady) {
-    Serial.println(F("Refusing move: motion baseline not ready."));
+  if (!refreshMotionReadyFromUartProbe()) {
+    printMotionBlockedMessage();
     return false;
   }
 
@@ -829,10 +944,6 @@ void startMove(long steps) {
       Serial.print(F("MSCNT before: "));
       Serial.println(motion.mscntBefore);
     }
-  } else {
-    if (shouldPrintDebug()) {
-      Serial.println(F("UART offline: running STEP/DIR only."));
-    }
   }
 }
 
@@ -866,12 +977,12 @@ void startApertureOpeningMove(int32_t targetApertureMilliMm) {
     return;
   }
 
-  if (targetApertureMilliMm < driver_config::apertureIrisMinimumMilliMm() ||
-      targetApertureMilliMm > driver_config::apertureIrisMaximumMilliMm()) {
+  if (targetApertureMilliMm < apertureIrisMinMilliMm ||
+      targetApertureMilliMm > apertureIrisMaxMilliMm) {
     Serial.print(F("Refusing aperture move: target is outside configured aperture range "));
-    printMilliMm(driver_config::apertureIrisMinimumMilliMm());
+    printMilliMm(apertureIrisMinMilliMm);
     Serial.print(F(".."));
-    printMilliMm(driver_config::apertureIrisMaximumMilliMm());
+    printMilliMm(apertureIrisMaxMilliMm);
     Serial.println(F(" mm."));
     return;
   }
@@ -1116,51 +1227,54 @@ void serviceMotion() {
 
 void printStatus() {
   Serial.println();
-  Serial.println(F("Nano SuperMini aperture driver status"));
+  Serial.println(F("Aperture driver status"));
   printDivider();
 
-  Serial.print(F("  motion ready     : "));
+  Serial.print(F("  motion ready: "));
   Serial.println(motionReady ? F("YES") : F("NO"));
 
-  Serial.print(F("  motion state     : "));
+  Serial.print(F("  motion lock: "));
+  Serial.println(motionReadyReasonText(motionReadyReason));
+
+  Serial.print(F("  motion state: "));
   Serial.println(motion.active ? F("ACTIVE") : F("IDLE"));
 
-  Serial.print(F("  endstop pin      : D"));
+  Serial.print(F("  endstop pin: D"));
   Serial.println(board::kEndstopPin);
 
-  Serial.print(F("  endstop active   : "));
+  Serial.print(F("  endstop active: "));
   Serial.println(board::kEndstopActiveHigh ? F("HIGH") : F("LOW"));
 
-  Serial.print(F("  endstop state    : "));
+  Serial.print(F("  endstop state: "));
   Serial.println(isEndstopTriggered() ? F("TRIGGERED") : F("IDLE"));
 
-  Serial.print(F("  endstop enabled  : "));
+  Serial.print(F("  endstop en: "));
   Serial.println(endstopEnabled ? F("ON") : F("OFF"));
 
-  Serial.print(F("  debug mode       : "));
+  Serial.print(F("  debug: "));
   Serial.println(debugMode ? F("ON") : F("OFF"));
 
-  Serial.print(F("  config source    : "));
+  Serial.print(F("  cfg src: "));
   Serial.println(runtimeConfigSourceText(runtimeConfigSource));
 
-  Serial.print(F("  config dirty     : "));
+  Serial.print(F("  cfg dirty: "));
   Serial.println(runtimeConfigDirty ? F("YES") : F("NO"));
 
-  Serial.print(F("  eeprom persist   : "));
+  Serial.print(F("  eeprom: "));
   Serial.println(isPersistenceEnabled() ? F("ENABLED") : F("DISABLED"));
 
   if (isPersistenceEnabled()) {
-    Serial.print(F("  saved config     : "));
+    Serial.print(F("  saved cfg: "));
     Serial.println(savedRuntimeConfigValid ? F("YES") : F("NO"));
 
-    Serial.print(F("  load status      : "));
+    Serial.print(F("  load status: "));
     Serial.println(runtimeConfigLoadStatusText(lastRuntimeConfigLoadStatus));
   }
 
-  Serial.print(F("  position known   : "));
+  Serial.print(F("  pos known: "));
   Serial.println(positionKnown ? F("YES") : F("NO"));
 
-  Serial.print(F("  position mm      : "));
+  Serial.print(F("  pos mm: "));
   if (positionKnown) {
     printMilliMm(currentPositionMilliMm);
     Serial.println();
@@ -1168,20 +1282,20 @@ void printStatus() {
     Serial.println(F("unknown"));
   }
 
-  Serial.print(F("  min position mm  : "));
+  Serial.print(F("  min mm: "));
   printMilliMm(driver_config::minimumPositionMilliMm());
   Serial.println();
 
-  Serial.print(F("  max position mm  : "));
+  Serial.print(F("  max mm: "));
   printMilliMm(driver_config::maximumPositionMilliMm());
   Serial.println();
 
-  Serial.print(F("  max speed mm/s   : "));
+  Serial.print(F("  max mm/s: "));
   printMilliMm(static_cast<int32_t>(driver_config::kMaximumSpeedMmPerSec) * 1000L);
   Serial.println();
 
   if (motion.active) {
-    Serial.print(F("  move progress    : "));
+    Serial.print(F("  move: "));
     Serial.print(motion.completedSteps);
     if (motion.bounded) {
       Serial.print(F("/"));
@@ -1191,86 +1305,85 @@ void printStatus() {
     }
   }
 
-  Serial.print(F("  last abort       : "));
+  Serial.print(F("  last abort: "));
   Serial.println(motionAbortReasonText(lastMotionAbort));
 
-  Serial.print(F("  UART enabled     : "));
+  Serial.print(F("  UART en: "));
   Serial.println(tmc.isEnabled() ? F("YES") : F("NO"));
 
-  Serial.print(F("  TMC connected    : "));
+  Serial.print(F("  TMC conn: "));
   Serial.println(tmcOk ? F("YES") : F("NO"));
 
   if (tmc.isEnabled()) {
-    Serial.print(F("  test_connection  : "));
+    Serial.print(F("  test conn: "));
     Serial.println(tmc.testConnection());
 
     if (tmcOk) {
-      Serial.print(F("  DRV_STATUS       : 0x"));
+      Serial.print(F("  DRV_STATUS: 0x"));
       Serial.println(tmc.drvStatus(), HEX);
 
-      Serial.print(F("  rms_current      : "));
+      Serial.print(F("  rms current: "));
       Serial.println(tmc.rmsCurrent());
 
-      Serial.print(F("  toff             : "));
+      Serial.print(F("  toff: "));
       Serial.println(tmc.toff());
 
-      Serial.print(F("  ot overtemp      : "));
+      Serial.print(F("  overtemp: "));
       Serial.println(tmc.overtemp() ? F("1") : F("0"));
 
-      Serial.print(F("  standstill       : "));
+      Serial.print(F("  standstill: "));
       Serial.println(tmc.standstill() ? F("1") : F("0"));
 
-      Serial.print(F("  MSCNT            : "));
+      Serial.print(F("  MSCNT: "));
       Serial.println(tmc.microstepCounter());
     }
   }
 
-  Serial.print(F("  configured mA    : "));
+  Serial.print(F("  cfg mA: "));
   Serial.println(runCurrentMa);
 
-  Serial.print(F("  steps/mm cfg     : "));
+  Serial.print(F("  steps/mm cfg: "));
   printMilliMm(static_cast<int32_t>(driver_config::kStepsPerMmX1000));
   Serial.println();
 
-  Serial.print(F("  steps/mm drv     : "));
+  Serial.print(F("  steps/mm drv: "));
   printMilliMm(static_cast<int32_t>(driver_config::kDerivedStepsPerMmX1000));
   Serial.println();
 
-  Serial.print(F("  microsteps       : "));
+  Serial.print(F("  microsteps: "));
   Serial.println(currentMicrosteps);
 
-  Serial.print(F("  step delay us    : "));
+  Serial.print(F("  step us: "));
   Serial.println(stepDelayUs);
 
-  Serial.print(F("  delay override   : "));
+  Serial.print(F("  delay ovrd: "));
   printStepDelayOverrideValue(stepDelayOverrideUs);
   Serial.println();
 
-  Serial.print(F("  speed limit us   : "));
+  Serial.print(F("  speed lim us: "));
   Serial.println(driver_config::speedLimitedStepDelayUsFor(currentMicrosteps));
 
-  Serial.print(F("  auto step delay  : "));
+  Serial.print(F("  auto step us: "));
   Serial.println(driver_config::effectiveNormalStepDelayUsFor(currentMicrosteps));
 
-  Serial.print(F("  homing delay us  : "));
+  Serial.print(F("  home us: "));
   Serial.println(driver_config::homingStepDelayUsFor(currentMicrosteps));
 
-  Serial.print(F("  est max mm/s     : "));
+  Serial.print(F("  est max mm/s: "));
   printMilliMm(static_cast<int32_t>(
       driver_config::estimatedMaxSpeedMilliMmPerSecForDelay(currentMicrosteps, stepDelayUs)));
   Serial.println();
 
-  Serial.print(F("  default move 1x  : "));
+  Serial.print(F("  def move 1x: "));
   Serial.println(driver_config::kDefaultMoveSteps);
 
-  Serial.print(F("  default move eff : "));
+  Serial.print(F("  def move eff: "));
   Serial.println(effectiveDefaultMoveSteps());
 
-  Serial.print(F("  step rate approx : "));
-  Serial.print(1000000.0 / (2.0 * stepDelayUs));
-  Serial.println(F(" steps/sec"));
+  Serial.print(F("  step/s: "));
+  Serial.println((1000000UL + stepDelayUs) / (2UL * stepDelayUs));
 
-  Serial.print(F("  auto disable     : "));
+  Serial.print(F("  auto disable: "));
   Serial.println(autoDisableAfterMove ? F("ON") : F("OFF"));
 
   printMicrostepRaw();
@@ -1324,27 +1437,28 @@ void initPins() {
 }
 
 void initTmcLayer() {
-  tmcOk = tmc.begin(runCurrentMa, currentMicrosteps);
-
   if (!tmc.isEnabled()) {
-    Serial.println(F("TMC UART layer is disabled in DriverConfig.h."));
-    Serial.println(F("STEP/DIR baseline is active; wire UART later when ready."));
+    setMotionReadyState(false, MotionReadyReason::kUartDisabled);
+    Serial.println(F("TMC UART disabled; motion locked."));
     return;
   }
+
+  tmcOk = tmc.begin(runCurrentMa, currentMicrosteps);
 
   Serial.print(F("test_connection() = "));
   Serial.println(tmc.testConnection());
 
   if (!tmcOk) {
+    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
     if (tmc.isConnected()) {
-      Serial.print(F("ERROR: TMC2209 setup failed: "));
+      Serial.print(F("ERROR: TMC setup failed: "));
       Serial.println(microstepStatusText(tmc.lastMicrostepStatus()));
     } else {
-      Serial.println(F("ERROR: TMC2209 not detected over UART."));
-      Serial.println(
-          F("Check PDN_UART wiring, resistor, ground, and driver address."));
+      Serial.println(F("ERROR: TMC UART not detected."));
+      Serial.println(F("Check PDN_UART wiring/address."));
     }
 
+    Serial.println(F("Motion locked until UART works."));
     return;
   }
 
@@ -1353,7 +1467,8 @@ void initTmcLayer() {
     currentMicrosteps = realMicrosteps;
   }
   refreshStepDelayUsFromCurrentSettings();
-  Serial.println(F("OK: TMC2209 detected over UART."));
+  setMotionReadyState(true, MotionReadyReason::kReady);
+  Serial.println(F("OK: TMC UART ready. Motion enabled."));
 }
 
 }  // namespace app
@@ -1368,18 +1483,24 @@ void setup() {
   delay(500);
 
   app::initPins();
+  const bool bootZeroedFromEndstop = app::zeroPositionFromBootEndstop();
+  app::loadRuntimeConfigAtBoot();
 
   Serial.println();
   Serial.println(F("Nano SuperMini aperture driver"));
   app::printArduinoName();
   Serial.println();
 
+  if (bootZeroedFromEndstop) {
+    Serial.println(F("Endstop active at boot; zeroed."));
+    Serial.println();
+  }
+
   if (watchdogResetDetected) {
     Serial.println(F("Reset cause: watchdog."));
     Serial.println();
   }
 
-  app::loadRuntimeConfigAtBoot();
   app::printRuntimeConfigStartupSummary();
   app::initTmcLayer();
   app::updateRuntimeConfigDirtyFromBaseline();

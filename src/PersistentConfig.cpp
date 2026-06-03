@@ -7,7 +7,7 @@ namespace persistent_config {
 namespace {
 
 constexpr uint32_t kRecordMagic = 0x41505452UL;  // "APTR"
-constexpr uint16_t kRecordVersion = 2;
+constexpr uint16_t kRecordVersion = 3;
 
 struct __attribute__((packed)) StoredRuntimeConfigPayload {
   uint8_t endstopEnabled = 0;
@@ -16,6 +16,8 @@ struct __attribute__((packed)) StoredRuntimeConfigPayload {
   uint16_t runCurrentMa = 0;
   uint16_t microsteps = 0;
   uint32_t stepDelayOverrideUs = 0;
+  int32_t apertureIrisMinMilliMm = 0;
+  int32_t apertureIrisMaxMilliMm = 0;
   char arduinoName[kArduinoNameCapacity] = {};
 };
 
@@ -77,6 +79,8 @@ RuntimeConfig runtimeConfigFromPayload(const StoredRuntimeConfigPayload& payload
   config.runCurrentMa = payload.runCurrentMa;
   config.microsteps = payload.microsteps;
   config.stepDelayOverrideUs = payload.stepDelayOverrideUs;
+  config.apertureIrisMinMilliMm = payload.apertureIrisMinMilliMm;
+  config.apertureIrisMaxMilliMm = payload.apertureIrisMaxMilliMm;
   memcpy(config.arduinoName, payload.arduinoName, sizeof(config.arduinoName));
   return config;
 }
@@ -89,6 +93,8 @@ StoredRuntimeConfigPayload payloadFromRuntimeConfig(const RuntimeConfig& config)
   payload.runCurrentMa = config.runCurrentMa;
   payload.microsteps = config.microsteps;
   payload.stepDelayOverrideUs = config.stepDelayOverrideUs;
+  payload.apertureIrisMinMilliMm = config.apertureIrisMinMilliMm;
+  payload.apertureIrisMaxMilliMm = config.apertureIrisMaxMilliMm;
   memcpy(payload.arduinoName, config.arduinoName, sizeof(payload.arduinoName));
   return payload;
 }
@@ -107,6 +113,8 @@ bool runtimeConfigsEqual(const RuntimeConfig& left, const RuntimeConfig& right) 
          left.runCurrentMa == right.runCurrentMa &&
          left.microsteps == right.microsteps &&
          left.stepDelayOverrideUs == right.stepDelayOverrideUs &&
+         left.apertureIrisMinMilliMm == right.apertureIrisMinMilliMm &&
+         left.apertureIrisMaxMilliMm == right.apertureIrisMaxMilliMm &&
          strcmp(left.arduinoName, right.arduinoName) == 0;
 }
 
@@ -136,6 +144,11 @@ bool isValidStepDelayOverrideUs(uint32_t stepDelayOverrideUs) {
          (stepDelayOverrideUs >= 5UL && stepDelayOverrideUs <= 100000UL);
 }
 
+bool isValidApertureIrisBounds(int32_t apertureIrisMinMilliMm,
+                               int32_t apertureIrisMaxMilliMm) {
+  return apertureIrisMinMilliMm < apertureIrisMaxMilliMm;
+}
+
 bool isValidArduinoName(const char* arduinoName) {
   const size_t length = boundedStringLength(arduinoName, kArduinoNameCapacity);
   return length > 0 && length <= kMaxArduinoNameLength &&
@@ -146,6 +159,8 @@ bool isValidRuntimeConfig(const RuntimeConfig& config) {
   return isValidRunCurrentMa(config.runCurrentMa) &&
          isSupportedMicrosteps(config.microsteps) &&
          isValidStepDelayOverrideUs(config.stepDelayOverrideUs) &&
+         isValidApertureIrisBounds(config.apertureIrisMinMilliMm,
+                                   config.apertureIrisMaxMilliMm) &&
          isValidArduinoName(config.arduinoName);
 }
 

@@ -21,11 +21,7 @@ bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
   driver_.mstep_reg_select(true);
   delay(50);
 
-  const uint8_t result = driver_.test_connection();
-  connected_ = (result == 0);
-
-  if (!connected_) {
-    lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
+  if (refreshConnection() != 0) {
     return false;
   }
 
@@ -47,6 +43,22 @@ bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
 bool Tmc2209Driver::isEnabled() const { return enabled_; }
 
 bool Tmc2209Driver::isConnected() const { return connected_; }
+
+uint8_t Tmc2209Driver::refreshConnection() {
+  if (!enabled_) {
+    connected_ = false;
+    lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
+    return 255;
+  }
+
+  const uint8_t result = driver_.test_connection();
+  connected_ = (result == 0);
+  if (!connected_) {
+    lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
+  }
+
+  return result;
+}
 
 bool Tmc2209Driver::setRunCurrent(uint16_t runCurrentMa) {
   if (!connected_) {

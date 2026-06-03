@@ -20,6 +20,7 @@ class Tmc2209Driver {
   bool begin(uint16_t runCurrentMa, uint16_t microsteps);
   bool isEnabled() const;
   bool isConnected() const;
+  uint8_t refreshConnection();
 
   bool setRunCurrent(uint16_t runCurrentMa);
   MicrostepStatus setMicrosteps(uint16_t microsteps);

@@ -2,7 +2,7 @@
 
 ## Project goal
 - Maintain a PlatformIO firmware project for an Arduino Nano SuperMini aperture driver.
-- Keep STEP/DIR motion as the stable baseline while supporting optional TMC2209 UART, active-low endstop protection, homing, and build-time YAML configuration.
+- Keep STEP/DIR pulse generation as the motion baseline while requiring live TMC2209 UART communication before any motion, alongside active-low endstop protection, homing, and build-time YAML configuration.
 
 ## Expected layout
 - `platformio.ini` contains board, dependency, and pre-build script configuration.
@@ -42,25 +42,30 @@
 - Forward recovery motion remains allowed while the endstop is active.
 - Homing seeks backward toward the minimum endstop and retracts forward away from it.
 - `H` performs double-tap homing: first touch zeroes, a configured forward clearance move happens, then a slower second touch verifies repeatability.
-- `E` toggles endstop protection for normal manual motion; it does not disable homing.
-- `D` toggles runtime debug verbosity; it boots from `arduino.debug_mode` and can be persisted with `write memory`.
-- `name` prints the active device name, and `name <new_name>` persists only the name to onboard EEPROM.
+- `config> endstop` toggles endstop protection for normal manual motion; it does not disable homing.
+- `D` toggles runtime debug verbosity; it boots from `arduino.debug_mode` and can be persisted with `write`.
+- `name` prints the active device name in Normal mode, and `config> name <new_name>` stages a rename in RAM until `write`.
 - The serial CLI has `Normal` and `Config` modes with prompts `> ` and `config> `.
 - `config` enters Config mode; `exit` and `q` return to Normal mode.
-- `i` keeps its existing current-setting behavior, but is exposed through Config mode rather than Normal mode.
+- `driver` toggles the driver enable state in Normal mode; `driver on` and `driver off` set it explicitly.
+- `status` prints the current firmware status in Normal mode.
+- `i`, `u`, `v`, `iris`, `write`, `reload`, `reset defaults`, `read`, and `defaults` are exposed through Config mode rather than Normal mode.
+- `a` and `endstop` are also exposed through Config mode rather than Normal mode.
 - Normal step delay comes from the `stepper_motor.microsteps_delay` table for the active microstep setting.
-- `v` applies a manual step-delay override; `u` clears it back to auto timing, and `write memory` can persist the current override.
+- `v` applies a manual step-delay override; `u` clears it back to auto timing, and `write` can persist the current override.
 - Homing step delay is derived automatically as `2x` the normal delay for the active microstep setting.
 - Position becomes known after homing or after backing into the minimum endstop.
 - Absolute `g <mm>` moves use fixed-point `0.001 mm` tracking and obey configured min/max limits.
 - `stepper_motor.steps_per_mm` is the source of truth for raw travel conversion; `full_stroke_mm` and `full_stroke_steps_1x` are diagnostic cross-check values.
-- `A <mm>` maps user-facing aperture opening mm onto raw travel using the configured linear iris range.
+- `aperture <mm>` maps user-facing aperture opening mm onto raw travel using the configured linear iris range.
+- `config> iris min <mm>` and `config> iris max <mm>` stage aperture-iris bounds in RAM until `write`.
 - Raw step jogging uses `f <steps>` and `b <steps>`; no dedicated signed-step command exists.
-- `write memory`, `reload`, `reset defaults`, `show memory`, and `show defaults` manage the typed onboard-EEPROM runtime config record.
+- `write`, `reload`, `reset defaults`, `read`, and `defaults` manage the typed onboard-EEPROM runtime config record.
 - `reboot` triggers an AVR watchdog reset, behaving like an MCU hard reset without external reset-control wiring.
 - `reboot` aborts any active move or homing cycle before resetting.
+- `driver off` aborts active motion before disabling the driver.
 - Status output includes `speed limit us` and `est max mm/s` to explain the active timing cap.
-- UART support is optional and controlled through build-time config.
+- Movement is locked unless live TMC2209 UART communication is available; disabling UART in config or losing communication blocks all stepping motion, including homing.
 
 ## PlatformIO workflow
 - Build: `pio run`

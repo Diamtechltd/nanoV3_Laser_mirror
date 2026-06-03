@@ -1,6 +1,6 @@
 # Nano SuperMini Aperture Driver
 
-PlatformIO firmware for an Arduino Nano SuperMini based aperture driver using STEP/DIR motion with optional TMC2209 UART support.
+PlatformIO firmware for an Arduino Nano SuperMini based aperture driver using STEP/DIR motion with TMC2209 UART-verified motion safety.
 
 The current firmware includes:
 
@@ -121,6 +121,7 @@ Section meanings:
 - `homing` controls retract behavior plus the double-tap homing verification pass.
 - `stepper_motor` describes the motor, measured steps/mm calibration, reference stroke calibration, and the per-microstep delay table used for normal motion timing.
 - `tmc2209` controls whether UART support is enabled and which baud rate is used for `PDN_UART`.
+- if `tmc2209.uart_enabled` is `false`, the firmware still builds, but all motion commands remain locked
 - `arduino` controls firmware-local behavior flags such as boot-time debug verbosity and whether runtime config save/load commands use onboard EEPROM.
 
 Timing behavior:
@@ -131,15 +132,15 @@ Timing behavior:
 - the second homing touch runs slower using `homing.second_seek_delay_multiplier`
 - `u <microsteps>` reapplies table-based timing automatically
 - `v <delay_us>` applies a manual runtime delay override until the next successful `u`, `reload`, or `reset defaults`
-- the current delay override can be persisted across reboot with `write memory`
+- the current delay override can be persisted across reboot with `write`
 
 EEPROM persistence behavior:
 
 - when `arduino.save_config_to_eeprom` is `true`, the firmware can save runtime tunables into the MCU's built-in EEPROM
 - the saved record is a typed struct, not a text file
-- saved fields are endstop enable, debug mode, run current, microsteps, step delay override, and auto-disable
+- saved fields are endstop enable, debug mode, run current, microsteps, step delay override, auto-disable, device name, and iris min/max
 - boot falls back to compile-time defaults if EEPROM is empty, corrupt, out of range, or incompatible
-- EEPROM is only written on explicit `write memory`, and changed bytes are updated with the Arduino EEPROM library
+- EEPROM is only written on explicit `write`, and changed bytes are updated with the Arduino EEPROM library
 - unsaved RAM-only changes do not survive `reboot`
 
 Position behavior:
@@ -149,7 +150,7 @@ Position behavior:
 - absolute position is tracked in `0.001 mm` units after homing or after backing into the minimum endstop
 - the minimum endstop is the absolute origin at `0.000 mm`
 - `g <mm>` absolute moves are allowed only when the position is known
-- `A <mm>` maps aperture opening mm onto raw carriage travel using the configured linear iris range
+- `aperture <mm>` maps aperture opening mm onto raw carriage travel using the configured linear iris range
 
 ## Endstop and homing behavior
 
@@ -169,46 +170,53 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `config` enters Config mode, which uses the prompt `config> `
 - `exit` and `q` leave Config mode and return to Normal mode
 - `h` or `?` prints help
-- `s` prints status
-- `e` enables the driver
-- `d` disables the driver
+- `status` prints status
+- `driver` toggles the driver between enabled and disabled
+- `driver on` explicitly enables the driver
+- `driver off` explicitly disables the driver
 - `f` moves forward using the default distance
 - `b` moves backward using the default distance
 - the no-argument `f` / `b` distance is computed as `default_move_steps * currentMicrosteps`
 - `f 2000` moves forward a specific raw step count
 - `b 2000` moves backward a specific raw step count
 - raw step jogging is available through `f <steps>` and `b <steps>` only
+- all motion commands require live TMC2209 UART communication and refuse to start if UART is disabled or fails
 - `g <mm>` moves to an absolute position in millimeters from the minimum endstop origin
-- `A <mm>` moves to an absolute aperture opening in millimeters
+- `aperture <mm>` moves to an absolute aperture opening in millimeters
+- `iris` is available in Config mode and prints the staged iris min/max values
+- `iris min <mm>` and `iris max <mm>` are available in Config mode and stage new iris bounds in RAM
 - `i <mA>` is available in Config mode and sets run current
-- `u <microsteps>` sets microsteps
-- `v <delay_us>` sets a manual step delay override
-- `a` toggles auto-disable after each move
+- `name` prints the active device name
+- `name <new_name>` is available in Config mode and stages a new device name in RAM
+- `u <microsteps>` is available in Config mode and sets microsteps
+- `v <delay_us>` is available in Config mode and sets a manual step delay override
+- `a` is available in Config mode and toggles auto-disable after each move
 - `H` homes toward the minimum endstop
 - `H <steps>` homes, verifies, and uses a one-shot retract override
-- `E` toggles endstop protection on or off for normal manual motion
+- `endstop` is available in Config mode and toggles endstop protection on or off for normal manual motion
 - `D` toggles runtime debug verbosity for move/homing chatter and TMC pulse diagnostics
-- `name` prints the active device name
-- `name <new_name>` saves a new device name to onboard EEPROM without changing other saved settings
-- `write memory` saves the current runtime config to onboard EEPROM
-- `reload` discards unsaved changes and reloads the saved EEPROM config, or compile-time defaults if EEPROM is invalid
-- `reset defaults` loads compile-time defaults into RAM and leaves them unsaved until `write memory`
-- `show memory` prints the currently saved EEPROM runtime config
-- `show defaults` prints the compile-time default runtime config derived from `conf.yaml`
+- `write` is available in Config mode and saves the current runtime config to onboard EEPROM
+- `write` saves all staged config changes, including a staged rename and iris min/max
+- `reload` is available in Config mode and discards unsaved changes, including a staged rename and iris min/max, then reloads the saved EEPROM config or compile-time defaults if EEPROM is invalid
+- `reset defaults` is available in Config mode and loads compile-time defaults into RAM until `write`, including the default device name and iris min/max
+- `read` is available in Config mode and prints the currently saved EEPROM runtime config
+- `defaults` is available in Config mode and prints the compile-time default runtime config derived from `conf.yaml`
 - `reboot` resets the AVR through the watchdog and restarts through the normal boot path
 - `reboot` aborts any active move or homing cycle before resetting
+- `driver off` aborts active motion before disabling the driver
 - status output now includes `speed limit us` and `est max mm/s` for timing visibility
 - status output also reports config source, dirty state, and EEPROM load status
-- `D` and `v` change live behavior immediately and can be made persistent with `write memory`
+- `D` and `v` change live behavior immediately and can be made persistent with `write`
 - the active boot banner prints `name:<value>` after loading defaults or saved EEPROM config
 - `reboot` is a true MCU reset, but it is not a literal external power-cycle of attached hardware
 
-Iris behavior:
+iris behavior:
 
 - `g <mm>` stays raw carriage travel
-- `A <mm>` is the user-facing aperture-opening command
-- with the current config, `A 1.500` maps to travel `0.000 mm` and `A 17.000` maps to travel `22.230 mm`
-- after a successful `A` move, firmware always prints the resulting aperture opening size, and prints the requested size only when debug mode is on
+- `aperture <mm>` is the user-facing aperture-opening command
+- with the current config, `aperture 1.500` maps to travel `0.000 mm` and `aperture 17.000` maps to travel `22.230 mm`
+- the active iris min/max can be changed in `config>` with `iris min ...` and `iris max ...`
+- after a successful `aperture` move, firmware always prints the resulting aperture opening size, and prints the requested size only when debug mode is on
 
 ## Pin and config workflow
 
@@ -227,4 +235,4 @@ Do not edit generated headers directly.
 - Verify the actual Nano SuperMini header mapping before finalizing `pins.yaml`.
 - Confirm the minimum endstop wiring and polarity before relying on homing.
 - Confirm the TMC2209 `PDN_UART` wiring before relying on UART mode.
-- Keep STEP/DIR bring-up working even if UART is temporarily disabled in `conf.yaml`.
+- Motion is intentionally locked whenever TMC UART is disabled or not communicating.
