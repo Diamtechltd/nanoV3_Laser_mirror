@@ -61,7 +61,6 @@ Current active assignments:
 - `D6` -> TMC2209 `DIR`
 - `D7` -> minimum endstop input, active-low, reserved for `endstop_pin`
 - `D8` -> `1k` resistor -> TMC2209 `PDN_UART`
-- `A5` -> `100 nF` capacitor -> Arduino `RST` for the hardware reboot pulse
 
 ### `conf.yaml`
 
@@ -202,14 +201,14 @@ The firmware uses hardware `Serial` at `115200` for the USB terminal.
 - `reset defaults` is available in Config mode and loads compile-time defaults into RAM until `write`, including the default device name and iris min/max
 - `read` is available in Config mode and prints the currently saved EEPROM runtime config
 - `defaults` is available in Config mode and prints the compile-time default runtime config derived from `conf.yaml`
-- `reboot` pulls `A5` low through a `100 nF` capacitor into `RST` and restarts the board through the external reset pulse
+- `reboot` resets the AVR through the watchdog and restarts through the normal boot path
 - `reboot` aborts any active move or homing cycle before resetting
 - `driver off` aborts active motion before disabling the driver
 - status output now includes `speed limit us` and `est max mm/s` for timing visibility
 - status output also reports config source, dirty state, and EEPROM load status
 - `debug` and `v` change live behavior immediately and can be made persistent with `write`
 - the active boot banner prints `name:<value>` after loading defaults or saved EEPROM config
-- `reboot` requires the `A5 -> 100 nF -> RST` hardware link and consumes `A5`
+- `reboot` is a true MCU reset, but it is not a literal external power-cycle of attached hardware
 
 iris behavior:
 

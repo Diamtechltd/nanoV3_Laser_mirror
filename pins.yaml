@@ -91,8 +91,8 @@ board_pins:
   A5:
     arduino_number: 19
     aliases: [SCL]
-    reserved: true
-    notes: Analog input A5; also usable as digital pin 19; reserved for reboot reset pulse output through a 100 nF capacitor to RST.
+    reserved: false
+    notes: Analog input A5; also usable as digital pin 19; currently unused and available if needed.
 
 non_gpio_pins:
   RST:
