@@ -4,6 +4,7 @@ Arduino D6 -> TMC2209 DIR
 Arduino D7 -> Endstop switch output (active HIGH, external pull-down required)
 Arduino D7 -> 10k resistor -> GND
 Arduino D8 -> 1k resistor -> TMC2209 PDN_UART
+Arduino A5 -> 100 nF capacitor -> Arduino RST
 Arduino 5V -> TMC2209 VCC_IO
 Arduino GND -> TMC2209 GND
 Motor supply VM -> TMC2209 VM

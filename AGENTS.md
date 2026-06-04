@@ -38,6 +38,7 @@
 
 ## Current behavior
 - `D7` is the minimum endstop input, wired active-low with `INPUT_PULLUP`.
+- `A5` is reserved for the reboot reset pulse output through a `100 nF` capacitor to `RST`.
 - The minimum endstop blocks backward motion into the stop only.
 - Forward recovery motion remains allowed while the endstop is active.
 - Homing seeks backward toward the minimum endstop and retracts forward away from it.
@@ -61,7 +62,7 @@
 - `config> iris min <mm>` and `config> iris max <mm>` stage aperture-iris bounds in RAM until `write`.
 - Raw step jogging uses `f <steps>` and `b <steps>`; no dedicated signed-step command exists.
 - `write`, `reload`, `reset defaults`, `read`, and `defaults` manage the typed onboard-EEPROM runtime config record.
-- `reboot` triggers an AVR watchdog reset, behaving like an MCU hard reset without external reset-control wiring.
+- `reboot` drives `A5` low through a `100 nF` capacitor into `RST`, behaving like a hardware reset pulse.
 - `reboot` aborts any active move or homing cycle before resetting.
 - `driver off` aborts active motion before disabling the driver.
 - Status output includes `speed limit us` and `est max mm/s` to explain the active timing cap.

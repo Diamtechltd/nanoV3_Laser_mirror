@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <avr/wdt.h>
 #include <string.h>
 
 #include "BoardConfig.h"
@@ -27,15 +26,8 @@ Tmc2209Driver tmc;
 MotionState motion;
 HomingCycleState homingCycle;
 MoveContext moveContext;
-uint8_t bootResetFlags __attribute__((section(".noinit")));
 
-void disableWatchdogAtStartup() __attribute__((naked))
-    __attribute__((used)) __attribute__((section(".init3")));
-void disableWatchdogAtStartup() {
-  bootResetFlags = MCUSR;
-  MCUSR = 0;
-  wdt_disable();
-}
+constexpr uint8_t kResetPulsePin = A5;
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
 bool debugMode = driver_config::kDebugMode;
@@ -618,14 +610,11 @@ void rebootBoard() {
     disableDriver();
   }
 
-  Serial.println(F("Rebooting via watchdog reset..."));
-  // Avoid Serial.flush() here because CDC/USB-backed serial paths can block
-  // long enough to make reboot appear hung.
+  Serial.println(F("Rebooting via A5 reset pulse..."));
   delay(100);
   noInterrupts();
-  wdt_reset();
-  wdt_enable(WDTO_120MS);
-  while (1) {} // hold until watchdog triggers a reset
+  digitalWrite(kResetPulsePin, HIGH);
+  //while (1) {}
 }
 
 const __FlashStringHelper* motionAbortReasonText(MotionAbortReason reason) {
@@ -1426,6 +1415,9 @@ void loadRuntimeConfigAtBoot() {
 }
 
 void initPins() {
+  digitalWrite(kResetPulsePin, LOW);
+  pinMode(kResetPulsePin, OUTPUT);
+
   pinMode(board::kEnablePin, OUTPUT);
   pinMode(board::kStepPin, OUTPUT);
   pinMode(board::kDirPin, OUTPUT);
@@ -1474,10 +1466,6 @@ void initTmcLayer() {
 }  // namespace app
 
 void setup() {
-  const bool watchdogResetDetected = (app::bootResetFlags & _BV(WDRF)) != 0;
-  MCUSR = 0;
-  wdt_disable();
-
   Serial.begin(board::kUsbSerialBaud);
   Serial.setTimeout(50);
   delay(500);
@@ -1493,11 +1481,6 @@ void setup() {
 
   if (bootZeroedFromEndstop) {
     Serial.println(F("Endstop active at boot; zeroed."));
-    Serial.println();
-  }
-
-  if (watchdogResetDetected) {
-    Serial.println(F("Reset cause: watchdog."));
     Serial.println();
   }
 

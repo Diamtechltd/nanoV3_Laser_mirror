@@ -118,7 +118,7 @@ void printNormalHelp() {
   Serial.println(F("  g [mm]       goto pos mm"));
   Serial.println(F("  aperture [mm] goto ap mm"));
   Serial.println(F("  H [steps]    home"));
-  Serial.println(F("  reboot       watchdog rst"));
+  Serial.println(F("  reboot       A5 rst pulse"));
   Serial.println();
 }
 
