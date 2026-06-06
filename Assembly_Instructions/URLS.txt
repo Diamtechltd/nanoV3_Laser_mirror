@@ -1,4 +1,12 @@
+Arduino Nano SuperMini V3:
 https://he.aliexpress.com/item/1005006468917096.html
+
+Nano SuperMini reference repo:
 https://github.com/maltman23/ArduinoNanoSuperMini
+
+BigTreeTech TMC2209 V1.2 reference:
 https://github.com/bigtreetech/BIGTREETECH-TMC2209-V1.2/tree/master
-https://he.aliexpress.com/item/1005008762529827.html https://www.ebay.co.uk/itm/406206667731
+
+6704-2RS bearing sources:
+https://he.aliexpress.com/item/1005008762529827.html
+https://www.ebay.co.uk/itm/406206667731

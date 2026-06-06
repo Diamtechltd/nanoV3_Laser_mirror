@@ -1,16 +1,22 @@
 Arduino D4 -> TMC2209 EN
 Arduino D5 -> TMC2209 STEP
 Arduino D6 -> TMC2209 DIR
-Arduino D7 -> Endstop switch output (active HIGH, external pull-down required)
-Arduino D7 -> 10k resistor -> GND
 Arduino D8 -> 1k resistor -> TMC2209 PDN_UART
+
+Endstop wiring:
+Endstop NC -> Arduino D7
+Endstop COM -> Arduino 5V
+Arduino D7 -> 10k resistor -> Arduino GND
+Triggered/open endstop -> D7 LOW
+
 Arduino 5V -> TMC2209 VCC_IO
 Arduino GND -> TMC2209 GND
 Motor supply VM -> TMC2209 VM
 Motor supply GND -> TMC2209 GND
+
 TMC2209 MS1 -> GND
 TMC2209 MS2 -> GND
 MS1/MS2 both GND selects UART address 0 (matches firmware).
 
-Motor coil A    -> TMC A1 / A2
-Motor coil B    -> TMC B1 / B2
+Motor coil A -> TMC A1 / A2
+Motor coil B -> TMC B1 / B2

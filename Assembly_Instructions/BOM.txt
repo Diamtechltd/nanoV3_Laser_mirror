@@ -1,9 +1,12 @@
-1 pcs - Aperture 1.5-17mm
-1 pcs - Arduino Nano SuperMini V3 https://he.aliexpress.com/item/1005006468917096.html $3
-1 pcs - BigTreeTech TMC2209 stepper driver v1.2 https://he.aliexpress.com/item/33029587820.html? $3
-1 pcs - 6704-2RS bearing https://he.aliexpress.com/item/1005009293556618.html $1.5
-1 pcs - D2F-L Right Angled microswitch https://he.aliexpress.com/item/1005011828555281.html $0.5
-2 pcs - 10k 1/4W axial-lead resistor
+Core parts:
+1 pcs - Aperture 1.5-17 mm assembly
+1 pcs - Arduino Nano SuperMini V3
+1 pcs - BigTreeTech TMC2209 stepper driver v1.2
+1 pcs - D2F-L right-angled microswitch
+1 pcs - 6704-2RS bearing
+1 pcs - 10k 1/4W axial-lead resistor
+1 pcs - 1k 1/4W axial-lead resistor
+
 1 pcs - 30mm Stroke 2-Phase 4-Wire Linear Screw Slider Actuator Nut 13.2 Ohms Mini Precious 6mm Planetary Gear Stepper Motor
 Compact Design:At just 6 * 7.5MM, this mini stepper motor linear actuator is a compact solution for space-constrained applications.
 Low Speed Operation:Designed for slow stroke2, the motor operates at low speeds, perfect for delicate tasks requiring precision.
@@ -11,10 +14,9 @@ Precision Planetary Gearbox:Features a 6mm planetary gearbox for smooth, precise
 High Temperature Resistance:With a 105℃挥发物≤ HELTC rating, this mini stepper motor linear actuator withstands high temperatures.
 High Precision Slider:The slider actuator offers a 30mm stroke, completing 5800 pulse signals for accurate positioning. $5
 
-
-SCREWS:
-4 pcs - M3x20 V head (For Case) (Minimum 16mm)
-4 pcs - M1.4x5 Flat head (for stepper + endstop)
-2 pcs - M2x8 Flat head (for endstop)
-1 pcs - m2x10 Flat head (for crank - stepper side)
-1 pcs - m2x3 Flat head (for crank - aperture side)
+Screws:
+4 pcs - M3x20 V-head for case
+4 pcs - M1.4x5 flat-head for stepper and endstop
+2 pcs - M2x8 flat-head for endstop
+1 pcs - M2x10 flat-head for crank, stepper side
+1 pcs - M2x3 flat-head for crank, aperture side
