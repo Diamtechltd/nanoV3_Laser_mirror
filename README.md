@@ -147,7 +147,7 @@ Key meanings:
 
 - raw jogging uses `f <steps>` and `b <steps>`
 - absolute carriage moves use `g <mm>`
-- user-facing aperture moves use `aperture <mm>`
+- user-facing aperture moves use `aperture <mm>` or `A <mm>`
 - homing uses `H` and performs a double-tap verification sequence
 - position becomes known after homing or after backing into the minimum endstop
 - the minimum endstop is the `0.000 mm` origin for position tracking
@@ -199,7 +199,7 @@ Prompt: `> `
 - `f [steps]`
 - `b [steps]`
 - `g <mm>`
-- `aperture <mm>`
+- `aperture <mm>`, `A <mm>`
 - `H [steps]`
 - `reboot`
 
