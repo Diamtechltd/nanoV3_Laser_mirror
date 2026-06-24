@@ -20,3 +20,5 @@ Screws:
 2 pcs - M2x8 flat-head for endstop
 1 pcs - M2x10 flat-head for crank, stepper side
 1 pcs - M2x3 flat-head for crank, aperture side
+optional:
+4pcs - M2x2 set screw for aperture itself. only if it doesnt hold tight against the assembly. 
