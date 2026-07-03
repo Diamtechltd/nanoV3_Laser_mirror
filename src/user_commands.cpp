@@ -14,6 +14,7 @@ constexpr size_t kCommandBufferSize = 48;
 
 char commandBuffer[kCommandBufferSize] = {};
 size_t commandLength = 0;
+bool lastTerminatorWasCarriageReturn = false;
 
 void trimInPlace(char* text) {
   if (text == nullptr) {
@@ -116,7 +117,7 @@ void printNormalHelp() {
   Serial.println(F("  f [steps]    fwd steps"));
   Serial.println(F("  b [steps]    back steps"));
   Serial.println(F("  g [mm]       goto pos mm"));
-  Serial.println(F("  aperture [mm] goto ap mm"));
+  Serial.println(F("  aperture/A [mm] goto ap mm"));
   Serial.println(F("  H [steps]    home"));
   Serial.println(F("  reboot       watchdog rst"));
   Serial.println();
@@ -461,10 +462,10 @@ void handleNormalModeCommand(const char* line) {
     printConfigOnlyHint();
     return;
   }
-  if (strcmp(command, "aperture") == 0) {
+  if (strcmp(command, "aperture") == 0 || strcmp(command, "A") == 0) {
     int32_t targetApertureMilliMm = 0;
     if (!parseMilliMm(arg, &targetApertureMilliMm)) {
-      Serial.println(F("Usage: aperture 8.500"));
+      Serial.println(F("Usage: aperture 8.500 / A 8.500"));
     } else {
       startApertureOpeningMove(targetApertureMilliMm);
     }
@@ -673,11 +674,14 @@ void handleCommand(const char* line) {
 void handleSerial() {
   while (Serial.available()) {
     const char incoming = static_cast<char>(Serial.read());
-    if (incoming == '\r') {
-      continue;
-    }
 
-    if (incoming == '\n') {
+    if (incoming == '\r' || incoming == '\n') {
+      if (incoming == '\n' && lastTerminatorWasCarriageReturn) {
+        lastTerminatorWasCarriageReturn = false;
+        continue;
+      }
+
+      lastTerminatorWasCarriageReturn = incoming == '\r';
       commandBuffer[commandLength] = '\0';
       trimInPlace(commandBuffer);
       handleCommand(commandBuffer);
@@ -686,6 +690,8 @@ void handleSerial() {
       commandBuffer[0] = '\0';
       continue;
     }
+
+    lastTerminatorWasCarriageReturn = false;
 
     if (commandLength + 1 < kCommandBufferSize) {
       commandBuffer[commandLength++] = incoming;
