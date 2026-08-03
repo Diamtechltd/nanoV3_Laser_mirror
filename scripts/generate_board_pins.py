@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from SCons.Script import DefaultEnvironment
 
@@ -10,11 +11,15 @@ PIN_CONFIG_PATH = PROJECT_DIR / "pins.yaml"
 GENERATED_HEADER_PATH = BUILD_DIR / "GeneratedBoardPins.h"
 
 ASSIGNMENT_TO_SYMBOL = {
-    "enable_pin": "kEnablePin",
-    "step_pin": "kStepPin",
-    "dir_pin": "kDirPin",
     "endstop_pin": "kEndstopPin",
     "tmc_uart_pin": "kTmcUartPin",
+}
+
+AXIS_KEY_PATTERN = re.compile(r"^axis(\d+)_(enable_pin|step_pin|dir_pin)$")
+AXIS_ROLE_SUFFIX_TO_SYMBOL = {
+    "enable_pin": "kAxisEnablePins",
+    "step_pin": "kAxisStepPins",
+    "dir_pin": "kAxisDirPins",
 }
 
 
@@ -95,7 +100,24 @@ def load_pin_config():
 
     if not isinstance(data, dict):
         fail("pins.yaml must define a top-level mapping")
-    return data
+
+    boards = data.get("boards")
+    active_board = data.get("active_board")
+
+    if boards is None and active_board is None:
+        return data
+
+    if not isinstance(boards, dict):
+        fail("pins.yaml boards must be a mapping when active_board is used")
+    if not isinstance(active_board, str) or not active_board:
+        fail("pins.yaml active_board must be a non-empty board key")
+    if active_board not in boards:
+        fail(f"pins.yaml active_board references unknown board profile {active_board}")
+
+    selected = boards[active_board]
+    if not isinstance(selected, dict):
+        fail(f"pins.yaml boards.{active_board} must be a mapping")
+    return selected
 
 
 def normalize_board_pins(data):
@@ -163,6 +185,84 @@ def resolve_assignments(data, board_pins):
             "arduino_number": board_pins[label]["arduino_number"],
         }
 
+    axis_role_map = {}
+    for key, value in assignments.items():
+        match = AXIS_KEY_PATTERN.match(str(key))
+        if not match:
+            continue
+
+        axis_index = int(match.group(1))
+        role_suffix = match.group(2)
+        axis_role_map.setdefault(axis_index, {})[role_suffix] = value
+
+    # Backward compatibility: map legacy single-axis keys to axis0_* when present.
+    if not axis_role_map and all(
+        legacy_key in assignments for legacy_key in ("enable_pin", "step_pin", "dir_pin")
+    ):
+        axis_role_map[0] = {
+            "enable_pin": assignments["enable_pin"],
+            "step_pin": assignments["step_pin"],
+            "dir_pin": assignments["dir_pin"],
+        }
+
+    if not axis_role_map:
+        fail(
+            "pins.yaml assignments must define axis pin triplets using "
+            "axis0_enable_pin/axis0_step_pin/axis0_dir_pin"
+        )
+
+    axis_indices = sorted(axis_role_map.keys())
+    for expected, actual in enumerate(axis_indices):
+        if expected != actual:
+            fail("Axis assignments must be contiguous starting at axis0")
+
+    axis_assignments = []
+    for axis_index in axis_indices:
+        role_values = axis_role_map[axis_index]
+        for required_role in ("enable_pin", "step_pin", "dir_pin"):
+            if required_role not in role_values:
+                fail(
+                    f"Missing assignments.axis{axis_index}_{required_role} in pins.yaml"
+                )
+
+        axis_meta = {}
+        for role_suffix in ("enable_pin", "step_pin", "dir_pin"):
+            label = role_values[role_suffix]
+            if not isinstance(label, str):
+                fail(
+                    f"assignments.axis{axis_index}_{role_suffix} must be a pin label"
+                )
+            if label not in board_pins:
+                fail(
+                    f"assignments.axis{axis_index}_{role_suffix} references unknown pin {label}"
+                )
+            if board_pins[label]["reserved"]:
+                fail(f"assignments.axis{axis_index}_{role_suffix} uses reserved pin {label}")
+            if label in used_labels:
+                fail(
+                    f"assignments.axis{axis_index}_{role_suffix} duplicates {label}, already used by "
+                    f"{used_labels[label]}"
+                )
+
+            used_labels[label] = f"axis{axis_index}_{role_suffix}"
+            axis_meta[role_suffix] = {
+                "label": label,
+                "arduino_number": board_pins[label]["arduino_number"],
+            }
+
+        axis_assignments.append(axis_meta)
+
+    resolved["kAxisCount"] = len(axis_assignments)
+    resolved["kAxisEnablePins"] = [
+        axis["enable_pin"]["arduino_number"] for axis in axis_assignments
+    ]
+    resolved["kAxisStepPins"] = [
+        axis["step_pin"]["arduino_number"] for axis in axis_assignments
+    ]
+    resolved["kAxisDirPins"] = [
+        axis["dir_pin"]["arduino_number"] for axis in axis_assignments
+    ]
+
     return resolved
 
 
@@ -177,9 +277,23 @@ def write_header(resolved_assignments):
         "namespace generated_board_pins {",
     ]
 
-    for symbol_name, meta in resolved_assignments.items():
+    axis_count = resolved_assignments["kAxisCount"]
+    lines.append(f"constexpr uint8_t kAxisCount = {axis_count};")
+
+    def format_array(symbol_name):
+        values = ", ".join(str(item) for item in resolved_assignments[symbol_name])
         lines.append(
-            f"constexpr uint8_t {symbol_name} = {meta['arduino_number']};"
+            f"constexpr uint8_t {symbol_name}[kAxisCount] = {{{values}}};"
+        )
+
+    format_array("kAxisEnablePins")
+    format_array("kAxisStepPins")
+    format_array("kAxisDirPins")
+
+    for scalar_symbol in ("kEndstopPin", "kTmcUartPin"):
+        meta = resolved_assignments[scalar_symbol]
+        lines.append(
+            f"constexpr uint8_t {scalar_symbol} = {meta['arduino_number']};"
             f"  // {meta['label']}"
         )
 

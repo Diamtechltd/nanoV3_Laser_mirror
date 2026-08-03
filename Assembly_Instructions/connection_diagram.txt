@@ -1,6 +1,16 @@
-Arduino D4 -> TMC2209 EN
-Arduino D5 -> TMC2209 STEP
-Arduino D6 -> TMC2209 DIR
+Nano SuperMini default profile (active_board: nano_supermini)
+
+Axis 0:
+Arduino D4 -> Driver EN
+Arduino D5 -> Driver STEP
+Arduino D6 -> Driver DIR
+
+Axis 1:
+Arduino D8 -> Driver EN
+Arduino D9 -> Driver STEP
+Arduino D10 -> Driver DIR
+
+Shared control:
 Arduino D7 -> 1k resistor -> TMC2209 PDN_UART
 
 Endstop wiring:
@@ -20,3 +30,19 @@ MS1/MS2 both GND selects UART address 0 (matches firmware).
 
 Motor coil A -> TMC A1 / A2
 Motor coil B -> TMC B1 / B2
+
+ESP32-DevKitC V4 profile (active_board: esp32_devkitc_v4)
+
+Axis 0:
+GPIO25 -> Driver EN
+GPIO26 -> Driver STEP
+GPIO27 -> Driver DIR
+
+Axis 1:
+GPIO18 -> Driver EN
+GPIO19 -> Driver STEP
+GPIO21 -> Driver DIR
+
+Shared control:
+GPIO17 -> 1k resistor -> TMC2209 PDN_UART
+GPIO33 -> Endstop input (wire NC/COM equivalent to Nano profile using 3.3V logic)

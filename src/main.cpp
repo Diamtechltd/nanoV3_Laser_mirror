@@ -1,6 +1,11 @@
 #include <Arduino.h>
-#include <avr/wdt.h>
 #include <string.h>
+
+#if defined(ARDUINO_ARCH_AVR)
+#include <avr/wdt.h>
+#elif defined(ARDUINO_ARCH_ESP32)
+#include <esp_system.h>
+#endif
 
 #include "BoardConfig.h"
 #include "DriverConfig.h"
@@ -27,6 +32,7 @@ Tmc2209Driver tmc;
 MotionState motion;
 HomingCycleState homingCycle;
 MoveContext moveContext;
+#if defined(ARDUINO_ARCH_AVR)
 uint8_t bootResetFlags __attribute__((section(".noinit")));
 
 void disableWatchdogAtStartup() __attribute__((naked))
@@ -36,6 +42,7 @@ void disableWatchdogAtStartup() {
   MCUSR = 0;
   wdt_disable();
 }
+#endif
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
 bool debugMode = driver_config::kDebugMode;
@@ -212,6 +219,10 @@ bool hasReachedMicros(unsigned long now, unsigned long target) {
   return static_cast<long>(now - target) >= 0;
 }
 
+bool isValidAxisIndex(uint8_t axisIndex) {
+  return axisIndex < driver_config::kAxisCount && axisIndex < board::kAxisCount;
+}
+
 bool isEndstopTriggered() {
   const int level = digitalRead(board::kEndstopPin);
   return board::kEndstopActiveHigh ? level == HIGH : level == LOW;
@@ -231,17 +242,31 @@ bool motionDrivesIntoMinimumEndstop(MotionMode mode, bool logicalForward) {
   return false;
 }
 
-void enableDriver() {
-  digitalWrite(board::kEnablePin, board::kEnableActiveLow ? LOW : HIGH);
+void enableDriver(uint8_t axisIndex) {
+  if (!isValidAxisIndex(axisIndex)) {
+    return;
+  }
+
+  digitalWrite(board::axisEnablePin(axisIndex),
+               board::kEnableActiveLow ? LOW : HIGH);
   driverEnabled = true;
   delay(5);
 }
 
-void disableDriver() {
-  digitalWrite(board::kEnablePin, board::kEnableActiveLow ? HIGH : LOW);
+void enableDriver() { enableDriver(0); }
+
+void disableDriver(uint8_t axisIndex) {
+  if (!isValidAxisIndex(axisIndex)) {
+    return;
+  }
+
+  digitalWrite(board::axisEnablePin(axisIndex),
+               board::kEnableActiveLow ? HIGH : LOW);
   driverEnabled = false;
   delay(5);
 }
+
+void disableDriver() { disableDriver(0); }
 
 void printDivider() { Serial.println(F("----------------------------------------")); }
 
@@ -618,12 +643,19 @@ void rebootBoard() {
     disableDriver();
   }
 
-  Serial.println(F("Rebooting via watchdog reset..."));
+  Serial.println(F("Rebooting..."));
   delay(100);
+
+#if defined(ARDUINO_ARCH_AVR)
   noInterrupts();
   wdt_reset();
   wdt_enable(WDTO_120MS);
   while (1) {}
+#elif defined(ARDUINO_ARCH_ESP32)
+  ESP.restart();
+#else
+  while (1) {}
+#endif
 }
 
 const __FlashStringHelper* motionAbortReasonText(MotionAbortReason reason) {
@@ -801,7 +833,7 @@ void finishMove(bool aborted, MotionAbortReason reason) {
   const MotionMode finishedMode = motion.mode;
   const bool finishedLogicalForward = motion.logicalForward;
   const unsigned long finishedCompletedSteps = motion.completedSteps;
-  digitalWrite(board::kStepPin, LOW);
+  digitalWrite(board::axisStepPin(motion.axisIndex), LOW);
 
   if (aborted) {
     lastMotionAbort = reason;
@@ -856,7 +888,7 @@ void finishMove(bool aborted, MotionAbortReason reason) {
       delay(100);
     }
 
-    disableDriver();
+    disableDriver(motion.axisIndex);
     if (shouldPrintDebug()) {
       Serial.println(finishedMode == MotionMode::kNormal
                          ? F("Driver disabled after move.")
@@ -875,7 +907,7 @@ void finishMove(bool aborted, MotionAbortReason reason) {
 }
 
 bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
-                 uint32_t requestedStepDelayUs, MotionMode mode,
+                 uint8_t axisIndex, uint32_t requestedStepDelayUs, MotionMode mode,
                  bool allowTriggeredStart) {
   if (!refreshMotionReadyFromUartProbe()) {
     printMotionBlockedMessage();
@@ -896,6 +928,7 @@ bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
 
   motion = MotionState{};
   motion.active = true;
+  motion.axisIndex = axisIndex;
   motion.logicalForward = logicalForward;
   motion.physicalDir =
       board::kInvertDirection ? !motion.logicalForward : motion.logicalForward;
@@ -907,15 +940,20 @@ bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
   motion.stepDelayUs = requestedStepDelayUs;
   motion.mode = mode;
 
-  digitalWrite(board::kDirPin, motion.physicalDir ? HIGH : LOW);
-  enableDriver();
+  digitalWrite(board::axisDirPin(motion.axisIndex), motion.physicalDir ? HIGH : LOW);
+  enableDriver(motion.axisIndex);
 
   motion.nextEdgeUs = micros() + driver_config::kDirectionSetupDelayUs;
   lastMotionAbort = MotionAbortReason::kNone;
   return true;
 }
 
-void startMove(long steps) {
+void startMove(uint8_t axisIndex, long steps) {
+  if (!isValidAxisIndex(axisIndex)) {
+    Serial.println(F("ERROR: axis index is out of range for this build."));
+    return;
+  }
+
   if (steps == 0) {
     Serial.println(F("Move ignored: 0 steps."));
     return;
@@ -923,7 +961,7 @@ void startMove(long steps) {
 
   const bool logicalForward = steps > 0;
   const unsigned long stepCount = static_cast<unsigned long>(labs(steps));
-  if (!beginMotion(logicalForward, stepCount, true, stepDelayUs,
+  if (!beginMotion(logicalForward, stepCount, true, axisIndex, stepDelayUs,
                    MotionMode::kNormal, false)) {
     return;
   }
@@ -931,6 +969,9 @@ void startMove(long steps) {
   if (shouldPrintDebug()) {
     Serial.println();
     Serial.print(F("Move "));
+    Serial.print(F("axis "));
+    Serial.print(motion.axisIndex);
+    Serial.print(F(" "));
     Serial.print(motion.logicalForward ? F("forward ") : F("backward "));
     Serial.print(motion.totalSteps);
     Serial.println(F(" steps"));
@@ -945,7 +986,19 @@ void startMove(long steps) {
   }
 }
 
-void startAbsolutePositionMove(int32_t targetPositionMilliMm) {
+void startMove(long steps) { startMove(0, steps); }
+
+void startAbsolutePositionMove(uint8_t axisIndex, int32_t targetPositionMilliMm) {
+  if (!isValidAxisIndex(axisIndex)) {
+    Serial.println(F("ERROR: axis index is out of range for this build."));
+    return;
+  }
+
+  if (axisIndex != 0) {
+    Serial.println(F("Absolute travel positioning is available on axis 0 only."));
+    return;
+  }
+
   if (!positionKnown) {
     Serial.println(F("Refusing absolute move: position unknown. Home first."));
     return;
@@ -964,10 +1017,25 @@ void startAbsolutePositionMove(int32_t targetPositionMilliMm) {
     return;
   }
 
-  startMove(deltaMilliMm > 0 ? static_cast<long>(steps) : -static_cast<long>(steps));
+  startMove(axisIndex,
+            deltaMilliMm > 0 ? static_cast<long>(steps) : -static_cast<long>(steps));
 }
 
-void startApertureOpeningMove(int32_t targetApertureMilliMm) {
+void startAbsolutePositionMove(int32_t targetPositionMilliMm) {
+  startAbsolutePositionMove(0, targetPositionMilliMm);
+}
+
+void startApertureOpeningMove(uint8_t axisIndex, int32_t targetApertureMilliMm) {
+  if (!isValidAxisIndex(axisIndex)) {
+    Serial.println(F("ERROR: axis index is out of range for this build."));
+    return;
+  }
+
+  if (axisIndex != 0) {
+    Serial.println(F("Aperture mapping is available on axis 0 only."));
+    return;
+  }
+
   resetMoveContext();
 
   if (!positionKnown) {
@@ -987,11 +1055,16 @@ void startApertureOpeningMove(int32_t targetApertureMilliMm) {
 
   moveContext.reportApertureOnCompletion = true;
   moveContext.requestedApertureMilliMm = targetApertureMilliMm;
-  startAbsolutePositionMove(apertureOpeningToTravelPositionMilliMm(targetApertureMilliMm));
+  startAbsolutePositionMove(axisIndex,
+                            apertureOpeningToTravelPositionMilliMm(targetApertureMilliMm));
 
   if (!motion.active) {
     resetMoveContext();
   }
+}
+
+void startApertureOpeningMove(int32_t targetApertureMilliMm) {
+  startApertureOpeningMove(0, targetApertureMilliMm);
 }
 
 bool startSecondHomingSeek();
@@ -1024,7 +1097,7 @@ void startHomingRetract(unsigned long retractSteps) {
   }
 
   const bool retractForward = driver_config::kHomingDirectionNegative;
-  if (!beginMotion(retractForward, retractSteps, true,
+  if (!beginMotion(retractForward, retractSteps, true, 0,
                    driver_config::homingStepDelayUsFor(currentMicrosteps),
                    MotionMode::kHomingRetract, true)) {
     homingCycle.active = false;
@@ -1046,7 +1119,7 @@ bool startDoubleTapAdvance() {
   }
 
   const bool advanceForward = driver_config::kHomingDirectionNegative;
-  if (!beginMotion(advanceForward, homingCycle.expectedSecondPassSteps, true,
+  if (!beginMotion(advanceForward, homingCycle.expectedSecondPassSteps, true, 0,
                    driver_config::homingStepDelayUsFor(currentMicrosteps),
                    MotionMode::kHomingClearance, true)) {
     homingCycle.active = false;
@@ -1071,7 +1144,7 @@ bool startSecondHomingSeek() {
     return false;
   }
 
-  if (!beginMotion(homingForward, 0, false,
+  if (!beginMotion(homingForward, 0, false, 0,
                    driver_config::secondSeekHomingStepDelayUsFor(currentMicrosteps),
                    MotionMode::kHomingSeekVerify, false)) {
     homingCycle.active = false;
@@ -1088,7 +1161,7 @@ bool startSecondHomingSeek() {
 
 void completeHomingClearance() {
   const unsigned long clearanceSteps = motion.completedSteps;
-  digitalWrite(board::kStepPin, LOW);
+  digitalWrite(board::axisStepPin(0), LOW);
   updateTrackedPositionFromSteps(true, clearanceSteps);
   resetMotionState();
   startSecondHomingSeek();
@@ -1098,7 +1171,7 @@ void handleHomingTrigger() {
   const MotionMode finishedMode = motion.mode;
   const unsigned long completedSteps = motion.completedSteps;
 
-  digitalWrite(board::kStepPin, LOW);
+  digitalWrite(board::axisStepPin(0), LOW);
   setKnownPositionToMinimum();
   resetMotionState();
 
@@ -1114,7 +1187,17 @@ void handleHomingTrigger() {
   startHomingRetract(homingCycle.plannedRetractSteps);
 }
 
-void homeAperture(unsigned long retractSteps) {
+void homeAperture(uint8_t axisIndex, unsigned long retractSteps) {
+  if (!isValidAxisIndex(axisIndex)) {
+    Serial.println(F("ERROR: axis index is out of range for this build."));
+    return;
+  }
+
+  if (axisIndex != 0) {
+    Serial.println(F("Homing is available on axis 0 only."));
+    return;
+  }
+
   if (isEndstopTriggered()) {
     lastMotionAbort = MotionAbortReason::kEndstopTriggered;
     Serial.println(F("Refusing homing: endstop input is already active."));
@@ -1124,7 +1207,7 @@ void homeAperture(unsigned long retractSteps) {
   resetHomingCycle(retractSteps);
 
   const bool homingForward = !driver_config::kHomingDirectionNegative;
-  if (!beginMotion(homingForward, 0, false,
+  if (!beginMotion(homingForward, 0, false, 0,
                    driver_config::homingStepDelayUsFor(currentMicrosteps),
                    MotionMode::kHomingSeekInitial, false)) {
     homingCycle.active = false;
@@ -1144,6 +1227,8 @@ void homeAperture(unsigned long retractSteps) {
     Serial.println(F(" us per edge."));
   }
 }
+
+void homeAperture(unsigned long retractSteps) { homeAperture(0, retractSteps); }
 
 void serviceMotion() {
   if (!motion.active) {
@@ -1183,14 +1268,14 @@ void serviceMotion() {
   // Cooperative edge scheduling keeps loop() responsive without moving to a
   // timer ISR yet, so later timer-based migration stays isolated.
   if (!motion.stepPinHigh) {
-    digitalWrite(board::kStepPin, HIGH);
+    digitalWrite(board::axisStepPin(motion.axisIndex), HIGH);
     motion.stepPinHigh = true;
     motion.nextEdgeUs = nowUs + motion.stepDelayUs;
     yield();
     return;
   }
 
-  digitalWrite(board::kStepPin, LOW);
+  digitalWrite(board::axisStepPin(motion.axisIndex), LOW);
   motion.stepPinHigh = false;
   ++motion.completedSteps;
 
@@ -1236,6 +1321,14 @@ void printStatus() {
 
   Serial.print(F("  motion state: "));
   Serial.println(motion.active ? F("ACTIVE") : F("IDLE"));
+
+  Serial.print(F("  axis count: "));
+  Serial.println(driver_config::kAxisCount);
+
+  if (motion.active) {
+    Serial.print(F("  active axis: "));
+    Serial.println(motion.axisIndex);
+  }
 
   Serial.print(F("  endstop pin: D"));
   Serial.println(board::kEndstopPin);
@@ -1424,14 +1517,16 @@ void loadRuntimeConfigAtBoot() {
 }
 
 void initPins() {
-  pinMode(board::kEnablePin, OUTPUT);
-  pinMode(board::kStepPin, OUTPUT);
-  pinMode(board::kDirPin, OUTPUT);
-  pinMode(board::kEndstopPin, INPUT_PULLUP);
+  for (uint8_t axis = 0; axis < board::kAxisCount; ++axis) {
+    pinMode(board::axisEnablePin(axis), OUTPUT);
+    pinMode(board::axisStepPin(axis), OUTPUT);
+    pinMode(board::axisDirPin(axis), OUTPUT);
 
-  digitalWrite(board::kStepPin, LOW);
-  digitalWrite(board::kDirPin, LOW);
-  disableDriver();
+    digitalWrite(board::axisStepPin(axis), LOW);
+    digitalWrite(board::axisDirPin(axis), LOW);
+    disableDriver(axis);
+  }
+  pinMode(board::kEndstopPin, INPUT_PULLUP);
 }
 
 void initTmcLayer() {
@@ -1472,9 +1567,12 @@ void initTmcLayer() {
 }  // namespace app
 
 void setup() {
-  const bool watchdogResetDetected = (app::bootResetFlags & _BV(WDRF)) != 0;
+  bool watchdogResetDetected = false;
+#if defined(ARDUINO_ARCH_AVR)
+  watchdogResetDetected = (app::bootResetFlags & _BV(WDRF)) != 0;
   MCUSR = 0;
   wdt_disable();
+#endif
 
   Serial.begin(board::kUsbSerialBaud);
   Serial.setTimeout(50);

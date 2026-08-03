@@ -75,6 +75,58 @@ bool splitCommandArg(const char* line, char* commandOut, size_t commandOutSize,
   return true;
 }
 
+bool parseAxisIndexedCommand(const char* token, char* baseCommandOut,
+                             size_t baseCommandOutSize, uint8_t* axisOut,
+                             bool* hasAxisOut) {
+  if (token == nullptr || baseCommandOut == nullptr || baseCommandOutSize == 0 ||
+      axisOut == nullptr || hasAxisOut == nullptr) {
+    return false;
+  }
+
+  *hasAxisOut = false;
+  *axisOut = 0;
+
+  const char* openBracket = strchr(token, '[');
+  if (openBracket == nullptr) {
+    strncpy(baseCommandOut, token, baseCommandOutSize - 1);
+    baseCommandOut[baseCommandOutSize - 1] = '\0';
+    return true;
+  }
+
+  const char* closeBracket = strchr(openBracket + 1, ']');
+  if (closeBracket == nullptr || closeBracket[1] != '\0') {
+    return false;
+  }
+
+  const size_t baseLength = static_cast<size_t>(openBracket - token);
+  if (baseLength == 0 || baseLength >= baseCommandOutSize) {
+    return false;
+  }
+
+  memcpy(baseCommandOut, token, baseLength);
+  baseCommandOut[baseLength] = '\0';
+
+  if (closeBracket == openBracket + 1) {
+    return false;
+  }
+
+  uint16_t axisValue = 0;
+  for (const char* cursor = openBracket + 1; cursor < closeBracket; ++cursor) {
+    if (*cursor < '0' || *cursor > '9') {
+      return false;
+    }
+
+    axisValue = static_cast<uint16_t>(axisValue * 10U + static_cast<uint16_t>(*cursor - '0'));
+    if (axisValue > 255U) {
+      return false;
+    }
+  }
+
+  *axisOut = static_cast<uint8_t>(axisValue);
+  *hasAxisOut = true;
+  return true;
+}
+
 long parseLongValue(const char* text) {
   if (text == nullptr) {
     return 0;
@@ -114,11 +166,11 @@ void printNormalHelp() {
   Serial.println(F("  config       config mode"));
   Serial.println(F("  status       display status"));
   Serial.println(F("  driver [on|off] drv on / off"));
-  Serial.println(F("  f [steps]    fwd steps"));
-  Serial.println(F("  b [steps]    back steps"));
-  Serial.println(F("  g [mm]       goto pos mm"));
-  Serial.println(F("  aperture/A [mm] goto ap mm"));
-  Serial.println(F("  H [steps]    home"));
+  Serial.println(F("  f[axis] [steps] fwd steps (ex: f[0] 4000)"));
+  Serial.println(F("  b[axis] [steps] back steps (ex: b[1] 2000)"));
+  Serial.println(F("  g[axis] [mm] goto pos mm (axis 0)"));
+  Serial.println(F("  aperture/A[axis] [mm] goto ap mm (axis 0)"));
+  Serial.println(F("  H[axis] [steps] home (axis 0)"));
   Serial.println(F("  reboot       watchdog rst"));
   Serial.println();
 }
@@ -454,32 +506,50 @@ void handleNormalModeCommand(const char* line) {
   char command[16] = {};
   const char* arg = "";
   splitCommandArg(line, command, sizeof(command), &arg);
-  if (strcmp(command, "iris") == 0) {
+
+  char baseCommand[16] = {};
+  uint8_t axisIndex = 0;
+  bool hasAxisIndex = false;
+  if (!parseAxisIndexedCommand(command, baseCommand, sizeof(baseCommand),
+                               &axisIndex, &hasAxisIndex)) {
+    Serial.println(F("ERROR: invalid axis format. Use command[index], ex: f[0] 4000"));
+    return;
+  }
+
+  if (hasAxisIndex && axisIndex >= driver_config::kAxisCount) {
+    Serial.print(F("ERROR: axis out of range. Valid axis: 0.."));
+    Serial.println(driver_config::kAxisCount - 1);
+    return;
+  }
+
+  const uint8_t targetAxis = hasAxisIndex ? axisIndex : 0;
+
+  if (strcmp(baseCommand, "iris") == 0) {
     printConfigOnlyHint();
     return;
   }
-  if (strcmp(command, "debug") == 0) {
+  if (strcmp(baseCommand, "debug") == 0) {
     printConfigOnlyHint();
     return;
   }
-  if (strcmp(command, "aperture") == 0 || strcmp(command, "A") == 0) {
+  if (strcmp(baseCommand, "aperture") == 0 || strcmp(baseCommand, "A") == 0) {
     int32_t targetApertureMilliMm = 0;
     if (!parseMilliMm(arg, &targetApertureMilliMm)) {
-      Serial.println(F("Usage: aperture 8.500 / A 8.500"));
+      Serial.println(F("Usage: aperture[0] 8.500 / A[0] 8.500"));
     } else {
-      startApertureOpeningMove(targetApertureMilliMm);
+      startApertureOpeningMove(targetAxis, targetApertureMilliMm);
     }
     return;
   }
-  if (strcmp(command, "status") == 0) {
+  if (strcmp(baseCommand, "status") == 0) {
     printStatus();
     return;
   }
-  if (strcmp(command, "driver") == 0) {
+  if (strcmp(baseCommand, "driver") == 0) {
     handleDriverCommand(arg);
     return;
   }
-  if (strcmp(command, "name") == 0) {
+  if (strcmp(baseCommand, "name") == 0) {
     if (arg[0] == '\0') {
       printArduinoName();
     } else {
@@ -487,7 +557,7 @@ void handleNormalModeCommand(const char* line) {
     }
     return;
   }
-  const char cmd = command[0];
+  const char cmd = baseCommand[0];
   const long value = parseLongValue(arg);
 
   switch (cmd) {
@@ -498,21 +568,22 @@ void handleNormalModeCommand(const char* line) {
 
     case 'f':
       resetMoveContext();
-      startMove(arg[0] != '\0' ? value : effectiveDefaultMoveSteps());
+      startMove(targetAxis, arg[0] != '\0' ? value : effectiveDefaultMoveSteps());
       break;
 
     case 'b':
       resetMoveContext();
-      startMove(arg[0] != '\0' ? -value : -effectiveDefaultMoveSteps());
+      startMove(targetAxis,
+                arg[0] != '\0' ? -value : -effectiveDefaultMoveSteps());
       break;
 
     case 'g': {
       resetMoveContext();
       int32_t targetPositionMilliMm = 0;
       if (!parseMilliMm(arg, &targetPositionMilliMm)) {
-        Serial.println(F("Usage: g 12.345"));
+        Serial.println(F("Usage: g[0] 12.345"));
       } else {
-        startAbsolutePositionMove(targetPositionMilliMm);
+        startAbsolutePositionMove(targetAxis, targetPositionMilliMm);
       }
       break;
     }
@@ -521,8 +592,8 @@ void handleNormalModeCommand(const char* line) {
       if (arg[0] != '\0' && value < 0) {
         Serial.println(F("ERROR: homing retract must be 0 or greater."));
       } else {
-        homeAperture(arg[0] != '\0' ? static_cast<unsigned long>(value)
-                                    : driver_config::kHomingRetractSteps);
+        homeAperture(targetAxis, arg[0] != '\0' ? static_cast<unsigned long>(value)
+                                                 : driver_config::kHomingRetractSteps);
       }
       break;
 

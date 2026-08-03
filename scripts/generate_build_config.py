@@ -13,6 +13,12 @@ MAX_ARDUINO_NAME_LENGTH = 31
 
 CONFIG_SCHEMA = {
     "motion": {
+        "axis_count": {
+            "symbol": "kAxisCount",
+            "type": int,
+            "min": 1,
+            "max": 8,
+        },
         "endstop_enabled": {
             "symbol": "kEndstopEnabled",
             "type": bool,
@@ -367,6 +373,7 @@ def cpp_type_and_value(symbol_name, value):
         return "bool", "true" if value else "false"
 
     if symbol_name in {
+        "kAxisCount",
         "kDefaultCurrentMa",
         "kDefaultMicrosteps",
         "kHomingRetractSteps",

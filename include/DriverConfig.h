@@ -11,6 +11,7 @@ constexpr uint8_t kDriverAddress = 0b00;
 constexpr uint32_t kStepsPerMmX1000 = generated_build_config::kStepsPerMmX1000;
 constexpr uint32_t kDerivedStepsPerMmX1000 =
     generated_build_config::kDerivedStepsPerMmX1000;
+constexpr uint8_t kAxisCount = generated_build_config::kAxisCount;
 constexpr int32_t kFullStrokeMilliMm = generated_build_config::kFullStrokeMilliMm;
 constexpr uint16_t kFullStrokeSteps1x = generated_build_config::kFullStrokeSteps1x;
 constexpr uint16_t kDefaultCurrentMa = generated_build_config::kDefaultCurrentMa;

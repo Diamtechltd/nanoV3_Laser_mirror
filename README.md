@@ -70,13 +70,17 @@ This project uses two build-time YAML files in the repo root.
 
 Use `pins.yaml` for firmware-visible pin inventory, reserved pins, and active assignments. Rebuild after any pin change so the generated board header is refreshed.
 
-Current active firmware assignments:
+`pins.yaml` now supports board profiles:
 
-- `D4` -> TMC2209 `EN`
-- `D5` -> TMC2209 `STEP`
-- `D6` -> TMC2209 `DIR`
-- `D7` -> minimum endstop input
-- `D8` -> `PDN_UART`
+- `active_board` selects the board profile used for generation
+- `boards.nano_supermini` contains Nano SuperMini pin inventory and assignments
+- `boards.esp32_devkitc_v4` contains ESP32-DevKitC V4 pin inventory and assignments
+
+Assignments now use axis keys:
+
+- `axis0_enable_pin`, `axis0_step_pin`, `axis0_dir_pin`
+- `axis1_enable_pin`, `axis1_step_pin`, `axis1_dir_pin`
+- `endstop_pin`, `tmc_uart_pin`
 
 For exact physical wiring, use [Assembly_Instructions/connection_diagram.txt](Assembly_Instructions/connection_diagram.txt).
 
@@ -92,6 +96,7 @@ aperture_iris:
   max_mm: 17
 
 motion:
+  axis_count: 2
   endstop_enabled: true
   minimum_position: 0
   maximum_position: 22.23
@@ -134,6 +139,7 @@ stepper_motor:
 
 Key meanings:
 
+- `motion.axis_count` sets the configured number of CLI-addressable axes.
 - `motion` controls soft range, move defaults, current, microsteps, speed limit, and auto-disable.
 - `aperture_iris` defines the user-facing aperture-opening range mapped onto carriage travel.
 - `homing` controls retract behavior and the double-tap verification pass.
@@ -196,17 +202,18 @@ Prompt: `> `
 - `name`
 - `config`, `con`
 - `driver`, `driver on`, `driver off`
-- `f [steps]`
-- `b [steps]`
-- `g <mm>`
-- `aperture <mm>`, `A <mm>`
-- `H [steps]`
+- `f[axis] [steps]`
+- `b[axis] [steps]`
+- `g[axis] <mm>`
+- `aperture[axis] <mm>`, `A[axis] <mm>`
+- `H[axis] [steps]`
 - `reboot`
 
 Notes:
 
 - `driver off` aborts active motion before disabling the driver
 - `reboot` uses an AVR watchdog reset and is not a literal external power cycle
+- `g[axis]`, `aperture[axis]`, `A[axis]`, and `H[axis]` are currently supported on axis `0` only
 
 ### Config mode
 

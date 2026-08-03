@@ -2,7 +2,7 @@
 
 ## Project goal
 
-- Maintain a PlatformIO firmware project for a Nano SuperMini aperture driver.
+- Maintain a PlatformIO firmware project for a multi-axis aperture controller.
 - Keep STEP/DIR motion as the baseline while requiring live TMC2209 UART communication before motion, alongside endstop protection, homing, EEPROM-backed runtime config, and a serial CLI.
 
 ## Canonical sources
@@ -41,14 +41,17 @@ If a change affects anything physical, update the matching file under `Assembly_
 
 ## Current firmware behavior
 
-- `D7` is the minimum endstop input used by the firmware.
+- `pins.yaml` supports board profiles and currently includes `nano_supermini` and `esp32_devkitc_v4`.
+- `active_board` in `pins.yaml` chooses the board pin profile.
+- `motion.axis_count` in `conf.yaml` defines the configured axis count for CLI validation.
+- Axis-indexed jog commands can target any configured STEP/DIR axis.
 - The minimum endstop is the `0.00 mm` origin for position tracking.
 - Backward motion into the minimum endstop is blocked; forward recovery motion remains allowed.
 - `H` performs double-tap homing: first touch zeroes, a forward clearance move happens, then a slower second touch verifies repeatability.
 - Position becomes known after homing or after backing into the minimum endstop.
-- Absolute carriage moves use `g <mm>`.
-- User-facing aperture moves use `aperture <mm>` or `A <mm>`.
-- Raw jogging uses `f <steps>` and `b <steps>` only.
+- Absolute carriage moves use `g[axis] <mm>` and are currently supported on axis `0` only.
+- User-facing aperture moves use `aperture[axis] <mm>` or `A[axis] <mm>` and are currently supported on axis `0` only.
+- Raw jogging uses `f[axis] <steps>` and `b[axis] <steps>`.
 - Motion is locked unless live TMC2209 UART communication is available.
 - `stepper_motor.steps_per_mm` is the source of truth for travel conversion.
 - Normal step delay comes from the active microstep timing table unless `v` overrides it.
@@ -63,7 +66,7 @@ If a change affects anything physical, update the matching file under `Assembly_
 - The serial CLI has `Normal` and `Config` modes with prompts `> ` and `config> `.
 - `config` and `con` enter Config mode.
 - `exit` and `q` return to Normal mode.
-- Normal-mode user commands include `status`, `name`, `driver`, `f`, `b`, `g`, `aperture`, `A`, `H`, and `reboot`.
+- Normal-mode user commands include `status`, `name`, `driver`, `f[axis]`, `b[axis]`, `g[axis]`, `aperture[axis]`, `A[axis]`, `H[axis]`, and `reboot`.
 - Config-mode user commands include `debug`, `endstop`, `a`, `i`, `u`, `v`, `iris`, `name`, `write`, `reload`, `reset`, `read`, and `defaults`.
 
 ## PlatformIO workflow

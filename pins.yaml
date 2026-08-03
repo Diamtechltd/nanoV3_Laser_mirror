@@ -1,112 +1,233 @@
-# Arduino Nano compatible USB-C board shown in the picture.
-# GPIO pins present on the pictured headers: D2-D13, RX/TX, A0-A5.
+# Multi-board pin map for the aperture controller firmware.
+# Select the active profile with active_board.
 
-board_pins:
-  D0:
-    arduino_number: 0
-    aliases: [RX]
-    reserved: true
-    notes: Hardware serial RX; shared with USB serial. Use only if serial monitor/programming is not needed.
-  D1:
-    arduino_number: 1
-    aliases: [TX]
-    reserved: true
-    notes: Hardware serial TX; shared with USB serial. Use only if serial monitor/programming is not needed.
+active_board: nano_supermini
 
-  D2:
-    arduino_number: 2
-    reserved: true
-    assignable_roles: [endstop_pin]
-    notes: Digital pin 2; external interrupt capable; reserved for the endstop switch input.
-  D3:
-    arduino_number: 3
-    reserved: false
-    notes: Digital pin 3; PWM; external interrupt capable.
-  D4:
-    arduino_number: 4
-    reserved: false
-    notes: Digital pin 4.
-  D5:
-    arduino_number: 5
-    reserved: false
-    notes: Digital pin 5; PWM.
-  D6:
-    arduino_number: 6
-    reserved: false
-    notes: Digital pin 6; PWM.
-  D7:
-    arduino_number: 7
-    reserved: false
-    notes: Digital pin 7; available for the TMC2209 UART pin.
-  D8:
-    arduino_number: 8
-    reserved: false
-    notes: Digital pin 8.
-  D9:
-    arduino_number: 9
-    reserved: false
-    notes: Digital pin 9; PWM.
-  D10:
-    arduino_number: 10
-    aliases: [SS]
-    reserved: false
-    notes: Digital pin 10; PWM; SPI SS.
-  D11:
-    arduino_number: 11
-    aliases: [MOSI]
-    reserved: false
-    notes: Digital pin 11; PWM; SPI MOSI.
-  D12:
-    arduino_number: 12
-    aliases: [MISO]
-    reserved: false
-    notes: Digital pin 12; SPI MISO.
-  D13:
-    arduino_number: 13
-    aliases: [SCK, LED_BUILTIN]
-    reserved: false
-    notes: Digital pin 13; SPI SCK; connected to onboard LED, avoid for quiet/precision signals.
+boards:
+  nano_supermini:
+    board_pins:
+      D0:
+        arduino_number: 0
+        aliases: [RX]
+        reserved: true
+        notes: Hardware serial RX; shared with USB serial.
+      D1:
+        arduino_number: 1
+        aliases: [TX]
+        reserved: true
+        notes: Hardware serial TX; shared with USB serial.
 
-  A0:
-    arduino_number: 14
-    reserved: false
-    notes: Analog input A0; also usable as digital pin 14.
-  A1:
-    arduino_number: 15
-    reserved: false
-    notes: Analog input A1; also usable as digital pin 15.
-  A2:
-    arduino_number: 16
-    reserved: false
-    notes: Analog input A2; also usable as digital pin 16.
-  A3:
-    arduino_number: 17
-    reserved: false
-    notes: Analog input A3; also usable as digital pin 17.
-  A4:
-    arduino_number: 18
-    aliases: [SDA]
-    reserved: false
-    notes: Analog input A4; also usable as digital pin 18; I2C SDA.
-  A5:
-    arduino_number: 19
-    aliases: [SCL]
-    reserved: false
-    notes: Analog input A5; also usable as digital pin 19; currently unused and available if needed.
+      D2:
+        arduino_number: 2
+        reserved: true
+        assignable_roles: [endstop_pin]
+        notes: Digital pin 2; reserved for minimum endstop input.
+      D3:
+        arduino_number: 3
+        reserved: false
+        notes: Digital pin 3; PWM.
+      D4:
+        arduino_number: 4
+        reserved: false
+        notes: Digital pin 4.
+      D5:
+        arduino_number: 5
+        reserved: false
+        notes: Digital pin 5; PWM.
+      D6:
+        arduino_number: 6
+        reserved: false
+        notes: Digital pin 6; PWM.
+      D7:
+        arduino_number: 7
+        reserved: false
+        notes: Digital pin 7; commonly used for TMC2209 UART.
+      D8:
+        arduino_number: 8
+        reserved: false
+        notes: Digital pin 8.
+      D9:
+        arduino_number: 9
+        reserved: false
+        notes: Digital pin 9; PWM.
+      D10:
+        arduino_number: 10
+        aliases: [SS]
+        reserved: false
+        notes: Digital pin 10; PWM; SPI SS.
+      D11:
+        arduino_number: 11
+        aliases: [MOSI]
+        reserved: false
+        notes: Digital pin 11; PWM; SPI MOSI.
+      D12:
+        arduino_number: 12
+        aliases: [MISO]
+        reserved: false
+        notes: Digital pin 12; SPI MISO.
+      D13:
+        arduino_number: 13
+        aliases: [SCK, LED_BUILTIN]
+        reserved: false
+        notes: Digital pin 13; SPI SCK; onboard LED.
 
-non_gpio_pins:
-  RST:
-    notes: Reset pin; not usable as normal GPIO.
-  5V:
-    notes: Regulated 5 V pin.
-  VIN:
-    notes: Raw input supply pin.
-  GND:
-    notes: Ground pins.
+      A0:
+        arduino_number: 14
+        reserved: false
+        notes: Analog input A0; also usable as digital pin 14.
+      A1:
+        arduino_number: 15
+        reserved: false
+        notes: Analog input A1; also usable as digital pin 15.
+      A2:
+        arduino_number: 16
+        reserved: false
+        notes: Analog input A2; also usable as digital pin 16.
+      A3:
+        arduino_number: 17
+        reserved: false
+        notes: Analog input A3; also usable as digital pin 17.
+      A4:
+        arduino_number: 18
+        aliases: [SDA]
+        reserved: false
+        notes: Analog input A4; also usable as digital pin 18.
+      A5:
+        arduino_number: 19
+        aliases: [SCL]
+        reserved: false
+        notes: Analog input A5; also usable as digital pin 19.
 
-assignments:
-  enable_pin: D4
-  step_pin: D5
-  dir_pin: D6
-  endstop_pin: D2
-  tmc_uart_pin: D7
+    non_gpio_pins:
+      RST:
+        notes: Reset pin; not usable as normal GPIO.
+      5V:
+        notes: Regulated 5 V pin.
+      VIN:
+        notes: Raw input supply pin.
+      GND:
+        notes: Ground pins.
+
+    assignments:
+      axis0_enable_pin: D4
+      axis0_step_pin: D5
+      axis0_dir_pin: D6
+      axis1_enable_pin: D8
+      axis1_step_pin: D9
+      axis1_dir_pin: D10
+      endstop_pin: D2
+      tmc_uart_pin: D7
+
+  esp32_devkitc_v4:
+    board_pins:
+      GPIO0:
+        arduino_number: 0
+        reserved: true
+        notes: Boot strapping pin; avoid for outputs that can pull it low at reset.
+      GPIO1:
+        arduino_number: 1
+        aliases: [TX0]
+        reserved: true
+        notes: UART0 TX; shared with USB serial.
+      GPIO2:
+        arduino_number: 2
+        reserved: false
+        notes: General purpose IO; strapping-aware.
+      GPIO3:
+        arduino_number: 3
+        aliases: [RX0]
+        reserved: true
+        notes: UART0 RX; shared with USB serial.
+      GPIO4:
+        arduino_number: 4
+        reserved: false
+        notes: General purpose IO.
+      GPIO5:
+        arduino_number: 5
+        reserved: false
+        notes: General purpose IO.
+      GPIO12:
+        arduino_number: 12
+        reserved: false
+        notes: General purpose IO.
+      GPIO13:
+        arduino_number: 13
+        reserved: false
+        notes: General purpose IO.
+      GPIO14:
+        arduino_number: 14
+        reserved: false
+        notes: General purpose IO.
+      GPIO15:
+        arduino_number: 15
+        reserved: false
+        notes: General purpose IO.
+      GPIO16:
+        arduino_number: 16
+        reserved: false
+        notes: General purpose IO.
+      GPIO17:
+        arduino_number: 17
+        reserved: false
+        notes: General purpose IO.
+      GPIO18:
+        arduino_number: 18
+        reserved: false
+        notes: General purpose IO.
+      GPIO19:
+        arduino_number: 19
+        reserved: false
+        notes: General purpose IO.
+      GPIO21:
+        arduino_number: 21
+        reserved: false
+        notes: General purpose IO.
+      GPIO22:
+        arduino_number: 22
+        reserved: false
+        notes: General purpose IO.
+      GPIO23:
+        arduino_number: 23
+        reserved: false
+        notes: General purpose IO.
+      GPIO25:
+        arduino_number: 25
+        reserved: false
+        notes: General purpose IO.
+      GPIO26:
+        arduino_number: 26
+        reserved: false
+        notes: General purpose IO.
+      GPIO27:
+        arduino_number: 27
+        reserved: false
+        notes: General purpose IO.
+      GPIO32:
+        arduino_number: 32
+        reserved: false
+        notes: General purpose IO.
+      GPIO33:
+        arduino_number: 33
+        reserved: false
+        assignable_roles: [endstop_pin]
+        notes: General purpose IO; used as endstop input in default mapping.
+
+    non_gpio_pins:
+      EN:
+        notes: Chip enable/reset.
+      3V3:
+        notes: 3.3 V rail.
+      5V:
+        notes: 5 V input/output depending on board design.
+      GND:
+        notes: Ground pins.
+
+    assignments:
+      axis0_enable_pin: GPIO25
+      axis0_step_pin: GPIO26
+      axis0_dir_pin: GPIO27
+      axis1_enable_pin: GPIO18
+      axis1_step_pin: GPIO19
+      axis1_dir_pin: GPIO21
+      endstop_pin: GPIO33
+      tmc_uart_pin: GPIO17

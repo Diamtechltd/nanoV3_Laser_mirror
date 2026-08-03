@@ -3,6 +3,7 @@ aperture_iris:
   max_mm: 17                      # in mm
 
 motion:
+  axis_count: 2
   endstop_enabled: true
   minimum_position: 0             # in mm
   maximum_position: 22.23         # in mm

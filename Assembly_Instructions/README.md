@@ -31,8 +31,10 @@ Use [connection_diagram.txt](connection_diagram.txt) for the exact wiring.
 
 Key points:
 
-- TMC2209 enable/step/dir use `D4`, `D5`, and `D6`
-- TMC2209 UART uses `D7` through a `1k` resistor
+- `pins.yaml` supports `nano_supermini` and `esp32_devkitc_v4` profiles via `active_board`
+- Nano axis 0 enable/step/dir use `D4`, `D5`, and `D6`
+- Nano axis 1 enable/step/dir use `D8`, `D9`, and `D10`
+- TMC2209 UART uses `D7` (Nano default) through a `1k` resistor
 - the minimum endstop wiring is:
   - `NC -> D2`
   - `COM -> 5V`

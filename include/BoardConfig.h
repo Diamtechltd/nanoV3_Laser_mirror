@@ -6,9 +6,21 @@
 namespace board {
 
 constexpr unsigned long kUsbSerialBaud = 115200UL;
-constexpr uint8_t kEnablePin = generated_board_pins::kEnablePin;
-constexpr uint8_t kStepPin = generated_board_pins::kStepPin;
-constexpr uint8_t kDirPin = generated_board_pins::kDirPin;
+constexpr uint8_t kAxisCount = generated_board_pins::kAxisCount;
+constexpr uint8_t axisEnablePin(uint8_t axis) {
+	return generated_board_pins::kAxisEnablePins[axis];
+}
+constexpr uint8_t axisStepPin(uint8_t axis) {
+	return generated_board_pins::kAxisStepPins[axis];
+}
+constexpr uint8_t axisDirPin(uint8_t axis) {
+	return generated_board_pins::kAxisDirPins[axis];
+}
+
+// Backward-compatible aliases for axis 0.
+constexpr uint8_t kEnablePin = generated_board_pins::kAxisEnablePins[0];
+constexpr uint8_t kStepPin = generated_board_pins::kAxisStepPins[0];
+constexpr uint8_t kDirPin = generated_board_pins::kAxisDirPins[0];
 constexpr uint8_t kEndstopPin = generated_board_pins::kEndstopPin;
 constexpr uint8_t kTmcUartPin = generated_board_pins::kTmcUartPin;
 
