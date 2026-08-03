@@ -32,11 +32,11 @@ Use [connection_diagram.txt](connection_diagram.txt) for the exact wiring.
 Key points:
 
 - TMC2209 enable/step/dir use `D4`, `D5`, and `D6`
-- TMC2209 UART uses `D8` through a `1k` resistor
+- TMC2209 UART uses `D7` through a `1k` resistor
 - the minimum endstop wiring is:
-  - `NC -> D7`
+  - `NC -> D2`
   - `COM -> 5V`
-  - `D7 -> 10k -> GND`
+  - `D2 -> 10k -> GND`
 
 ## Bring-up checklist
 

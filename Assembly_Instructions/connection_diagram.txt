@@ -1,13 +1,13 @@
 Arduino D4 -> TMC2209 EN
 Arduino D5 -> TMC2209 STEP
 Arduino D6 -> TMC2209 DIR
-Arduino D8 -> 1k resistor -> TMC2209 PDN_UART
+Arduino D7 -> 1k resistor -> TMC2209 PDN_UART
 
 Endstop wiring:
-Endstop NC -> Arduino D7
+Endstop NC -> Arduino D2
 Endstop COM -> Arduino 5V
-Arduino D7 -> 10k resistor -> Arduino GND
-Triggered/open endstop -> D7 LOW
+Arduino D2 -> 10k resistor -> Arduino GND
+Triggered/open endstop -> D2 LOW
 
 Arduino 5V -> TMC2209 VCC_IO
 Arduino GND -> TMC2209 GND

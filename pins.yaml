@@ -15,8 +15,9 @@ board_pins:
 
   D2:
     arduino_number: 2
-    reserved: false
-    notes: Digital pin 2; external interrupt capable.
+    reserved: true
+    assignable_roles: [endstop_pin]
+    notes: Digital pin 2; external interrupt capable; reserved for the endstop switch input.
   D3:
     arduino_number: 3
     reserved: false
@@ -35,9 +36,8 @@ board_pins:
     notes: Digital pin 6; PWM.
   D7:
     arduino_number: 7
-    reserved: true
-    assignable_roles: [endstop_pin]
-    notes: Digital pin 7; reserved for the endstop switch input.
+    reserved: false
+    notes: Digital pin 7; available for the TMC2209 UART pin.
   D8:
     arduino_number: 8
     reserved: false
@@ -108,5 +108,5 @@ assignments:
   enable_pin: D4
   step_pin: D5
   dir_pin: D6
-  endstop_pin: D7
-  tmc_uart_pin: D8
+  endstop_pin: D2
+  tmc_uart_pin: D7
