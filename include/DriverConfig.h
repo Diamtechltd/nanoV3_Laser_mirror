@@ -6,7 +6,6 @@
 namespace driver_config {
 
 constexpr float kRSense = 0.11f;
-constexpr uint8_t kDriverAddress = 0b00;
 
 constexpr uint32_t kStepsPerMmX1000 = generated_build_config::kStepsPerMmX1000;
 constexpr uint32_t kDerivedStepsPerMmX1000 =

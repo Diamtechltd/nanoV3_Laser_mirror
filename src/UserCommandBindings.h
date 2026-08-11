@@ -53,6 +53,7 @@ struct MotionState {
   unsigned long totalSteps = 0;
   unsigned long completedSteps = 0;
   unsigned long startMs = 0;
+  unsigned long timeoutMs = 0;
   unsigned long nextStatusMs = 0;
   unsigned long nextEdgeUs = 0;
   uint16_t mscntBefore = 0;
@@ -66,7 +67,7 @@ extern MotionState motion;
 extern HomingCycleState homingCycle;
 extern bool autoDisableAfterMove;
 extern bool debugMode;
-extern bool driverEnabled;
+extern bool driverEnabledByAxis[board::kAxisCount];
 extern bool endstopEnabled;
 extern bool tmcOk;
 extern bool runtimeConfigDirty;

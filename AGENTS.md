@@ -53,21 +53,25 @@ If a change affects anything physical, update the matching file under `Assembly_
 - User-facing aperture moves use `aperture[axis] <mm>` or `A[axis] <mm>` and are currently supported on axis `0` only.
 - Raw jogging uses `f[axis] <steps>` and `b[axis] <steps>`.
 - Motion is locked unless live TMC2209 UART communication is available.
-- `stepper_motor.steps_per_mm` is the source of truth for travel conversion.
+- `stepper_motor.steps_per_mm` and `stepper_motor.gear_ratio` are the source of truth for travel conversion.
 - Normal step delay comes from the active microstep timing table unless `v` overrides it.
 - `u` clears any manual delay override back to automatic timing.
 - Runtime config is staged in RAM and persisted only by `write`.
 - `reload` discards unsaved staged changes.
 - `reset` loads compile-time defaults into RAM without writing EEPROM.
 - `reboot` uses an AVR watchdog reset.
+- CLI prompts include the device name prefix (for monitor timestamp readability).
+- Axis selection is stateful via `config <axis>`, `config<axis>`, `config[axis]`, or `motor <axis>`.
+- Axis-less move/driver commands target the selected axis.
 
 ## Current CLI shape
 
-- The serial CLI has `Normal` and `Config` modes with prompts `> ` and `config> `.
+- The serial CLI has `Normal` and `Config` modes with prompts `<device-name> > ` and `<device-name> config<axis> > `.
 - `config` and `con` enter Config mode.
 - `exit` and `q` return to Normal mode.
-- Normal-mode user commands include `status`, `name`, `driver`, `f[axis]`, `b[axis]`, `g[axis]`, `aperture[axis]`, `A[axis]`, `H[axis]`, and `reboot`.
-- Config-mode user commands include `debug`, `endstop`, `a`, `i`, `u`, `v`, `iris`, `name`, `write`, `reload`, `reset`, `read`, and `defaults`.
+- `config <axis>`, `config<axis>`, `config[axis]`, and `motor <axis>` update the selected axis in both modes.
+- Normal-mode user commands include `status`, `name`, `driver`, `enable`, `disable`, `f[axis]`, `b[axis]`, `g[axis]`, `aperture[axis]`, `A[axis]`, `H[axis]`, and `reboot`.
+- Config-mode user commands include `driver`, `enable`, `disable`, `debug`, `endstop`, `a`, `i`, `u`, `v`, `iris`, `name`, `write`, `reload`, `reset`, `read`, and `defaults`.
 
 ## PlatformIO workflow
 

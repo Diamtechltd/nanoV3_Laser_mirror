@@ -30,6 +30,7 @@ arduino:
 
 stepper_motor:
   steps_per_mm: 193.333
+  gear_ratio: 1000.0             # output:input ratio (1.0 = direct drive)
   full_stroke_mm: 30
   full_stroke_steps_1x: 5800
   microsteps_delay: # safe minimum delay in microseconds for each microstep, to avoid losing steps at high speeds

@@ -109,14 +109,16 @@ boards:
         notes: Ground pins.
 
     assignments:
-      axis0_enable_pin: D4
+    
       axis0_step_pin: D5
       axis0_dir_pin: D6
-      axis1_enable_pin: D8
-      axis1_step_pin: D9
-      axis1_dir_pin: D10
+      axis0_uart_pin: D7
+      axis0_driver_address: 0
+      axis1_step_pin: A3
+      axis1_dir_pin: A4
+      axis1_uart_pin: A1
+      axis1_driver_address: 1
       endstop_pin: D2
-      tmc_uart_pin: D7
 
   esp32_devkitc_v4:
     board_pins:
@@ -223,11 +225,12 @@ boards:
         notes: Ground pins.
 
     assignments:
-      axis0_enable_pin: GPIO25
       axis0_step_pin: GPIO26
       axis0_dir_pin: GPIO27
-      axis1_enable_pin: GPIO18
+      axis0_uart_pin: GPIO17
+      axis0_driver_address: 0
       axis1_step_pin: GPIO19
       axis1_dir_pin: GPIO21
+      axis1_uart_pin: GPIO16
+      axis1_driver_address: 1
       endstop_pin: GPIO33
-      tmc_uart_pin: GPIO17

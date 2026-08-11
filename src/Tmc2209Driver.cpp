@@ -1,11 +1,42 @@
 #include "Tmc2209Driver.h"
 
 Tmc2209Driver::Tmc2209Driver()
-    : driver_(board::kTmcUartPin, board::kTmcUartPin, driver_config::kRSense,
-              driver_config::kDriverAddress),
+    : driver_(nullptr),
+      uartPin_(board::kTmcUartPin),
+      driverAddress_(board::kTmcDriverAddress),
+      hasDriver_(false),
       enabled_(driver_config::kDriverUartEnabled),
       connected_(false),
+      enabledState_(false),
       lastMicrostepStatus_(MicrostepStatus::kUnavailable) {}
+
+bool Tmc2209Driver::configure(uint8_t uartPin, uint8_t driverAddress) {
+  if (driverAddress > 3) {
+    connected_ = false;
+    lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
+    return false;
+  }
+
+  if (hasDriver_ && uartPin_ == uartPin && driverAddress_ == driverAddress) {
+    return true;
+  }
+
+  if (hasDriver_) {
+    driver_->~TMC2209Stepper();
+    driver_ = nullptr;
+    hasDriver_ = false;
+  }
+
+  uartPin_ = uartPin;
+  driverAddress_ = driverAddress;
+  driver_ = new (storage_) TMC2209Stepper(uartPin_, uartPin_, driver_config::kRSense,
+                                          driverAddress_);
+  hasDriver_ = true;
+  connected_ = false;
+  enabledState_ = false;
+  lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
+  return true;
+}
 
 bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
   if (!enabled_) {
@@ -14,27 +45,32 @@ bool Tmc2209Driver::begin(uint16_t runCurrentMa, uint16_t microsteps) {
     return false;
   }
 
-  driver_.beginSerial(driver_config::kDriverUartBaud);
+  if (!hasDriver_ && !configure(uartPin_, driverAddress_)) {
+    return false;
+  }
+
+  driver_->beginSerial(driver_config::kDriverUartBaud);
   delay(50);
 
-  driver_.pdn_disable(true);
-  driver_.mstep_reg_select(true);
+  driver_->pdn_disable(true);
+  driver_->mstep_reg_select(true);
   delay(50);
 
   if (refreshConnection() != 0) {
     return false;
   }
 
-  driver_.pdn_disable(true);
-  driver_.mstep_reg_select(true);
-  driver_.I_scale_analog(false);
-  driver_.toff(4);
-  driver_.blank_time(24);
-  driver_.en_spreadCycle(true);
-  driver_.rms_current(runCurrentMa);
-  driver_.ihold(1);
-  driver_.iholddelay(1);
-  driver_.TPOWERDOWN(2);
+  driver_->pdn_disable(true);
+  driver_->mstep_reg_select(true);
+  driver_->I_scale_analog(false);
+  driver_->toff(4);
+  driver_->blank_time(24);
+  driver_->en_spreadCycle(true);
+  driver_->rms_current(runCurrentMa);
+  driver_->ihold(1);
+  driver_->iholddelay(1);
+  driver_->TPOWERDOWN(2);
+  enabledState_ = true;
 
   lastMicrostepStatus_ = setMicrosteps(microsteps);
   return lastMicrostepStatus_ == MicrostepStatus::kOk;
@@ -45,13 +81,13 @@ bool Tmc2209Driver::isEnabled() const { return enabled_; }
 bool Tmc2209Driver::isConnected() const { return connected_; }
 
 uint8_t Tmc2209Driver::refreshConnection() {
-  if (!enabled_) {
+  if (!enabled_ || !hasDriver_) {
     connected_ = false;
     lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
     return 255;
   }
 
-  const uint8_t result = driver_.test_connection();
+  const uint8_t result = driver_->test_connection();
   connected_ = (result == 0);
   if (!connected_) {
     lastMicrostepStatus_ = MicrostepStatus::kUnavailable;
@@ -65,9 +101,31 @@ bool Tmc2209Driver::setRunCurrent(uint16_t runCurrentMa) {
     return false;
   }
 
-  driver_.rms_current(runCurrentMa);
+  driver_->rms_current(runCurrentMa);
   return true;
 }
+
+bool Tmc2209Driver::setEnabledState(bool enable) {
+  if (!connected_ || !hasDriver_) {
+    return false;
+  }
+
+  if (enable) {
+    driver_->toff(4);
+    driver_->ihold(1);
+    driver_->iholddelay(1);
+  } else {
+    // Keep chopper running so UART remains responsive, but drop hold current.
+    driver_->toff(4);
+    driver_->ihold(0);
+    driver_->iholddelay(1);
+  }
+
+  enabledState_ = enable;
+  return true;
+}
+
+bool Tmc2209Driver::enabledState() const { return enabledState_; }
 
 Tmc2209Driver::MicrostepStatus Tmc2209Driver::setMicrosteps(
     uint16_t microsteps) {
@@ -82,15 +140,15 @@ Tmc2209Driver::MicrostepStatus Tmc2209Driver::setMicrosteps(
     return lastMicrostepStatus_;
   }
 
-  driver_.mstep_reg_select(true);
-  driver_.intpol(false);
-  driver_.microsteps(microsteps);
+  driver_->mstep_reg_select(true);
+  driver_->intpol(false);
+  driver_->microsteps(microsteps);
   delay(5);
 
-  uint32_t chop = driver_.CHOPCONF();
+  uint32_t chop = driver_->CHOPCONF();
   chop &= ~(0x0FUL << 24);
   chop |= (static_cast<uint32_t>(mres) << 24);
-  driver_.CHOPCONF(chop);
+  driver_->CHOPCONF(chop);
   delay(10);
 
   lastMicrostepStatus_ = getRealMicrosteps() == microsteps
@@ -108,7 +166,7 @@ uint16_t Tmc2209Driver::getRealMicrosteps() {
     return 0;
   }
 
-  const uint32_t chop = driver_.CHOPCONF();
+  const uint32_t chop = driver_->CHOPCONF();
   const uint8_t mres = (chop >> 24) & 0x0F;
   return mresToMicrosteps(mres);
 }
@@ -118,37 +176,37 @@ uint8_t Tmc2209Driver::testConnection() {
     return 255;
   }
 
-  return driver_.test_connection();
+  return driver_->test_connection();
 }
 
 uint32_t Tmc2209Driver::drvStatus() {
-  return connected_ ? driver_.DRV_STATUS() : 0;
+  return connected_ ? driver_->DRV_STATUS() : 0;
 }
 
 uint16_t Tmc2209Driver::rmsCurrent() {
-  return connected_ ? driver_.rms_current() : 0;
+  return connected_ ? driver_->rms_current() : 0;
 }
 
-uint8_t Tmc2209Driver::toff() { return connected_ ? driver_.toff() : 0; }
+uint8_t Tmc2209Driver::toff() { return connected_ ? driver_->toff() : 0; }
 
 bool Tmc2209Driver::overtemp() {
-  return connected_ ? driver_.ot() : false;
+  return connected_ ? driver_->ot() : false;
 }
 
 bool Tmc2209Driver::standstill() {
-  return connected_ ? driver_.stst() : false;
+  return connected_ ? driver_->stst() : false;
 }
 
 uint16_t Tmc2209Driver::microstepCounter() {
-  return connected_ ? driver_.MSCNT() : 0;
+  return connected_ ? driver_->MSCNT() : 0;
 }
 
 uint32_t Tmc2209Driver::chopconf() {
-  return connected_ ? driver_.CHOPCONF() : 0;
+  return connected_ ? driver_->CHOPCONF() : 0;
 }
 
 uint16_t Tmc2209Driver::libraryMicrosteps() {
-  return connected_ ? driver_.microsteps() : 0;
+  return connected_ ? driver_->microsteps() : 0;
 }
 
 uint8_t Tmc2209Driver::microstepsToMres(uint16_t microsteps) {

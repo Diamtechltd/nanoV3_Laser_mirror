@@ -113,6 +113,11 @@ CONFIG_SCHEMA = {
             "type": "fixed_3dp",
             "min": 1,
         },
+        "gear_ratio": {
+            "symbol": "kGearRatioX1000",
+            "type": "fixed_3dp",
+            "min": 1,
+        },
         "full_stroke_mm": {
             "symbol": "kFullStrokeMilliMm",
             "type": "milli_mm",
@@ -320,10 +325,23 @@ def validate_and_resolve(data):
     if resolved["kFullStrokeMilliMm"] <= 0:
         fail("stepper_motor.full_stroke_mm must be greater than 0")
 
+    resolved["kStepsPerMmX1000"] = int(
+        round(
+            resolved["kStepsPerMmX1000"] *
+            resolved["kGearRatioX1000"] / 1000.0
+        )
+    )
+
     derived_steps_per_mm_x1000 = int(
         round(
             resolved["kFullStrokeSteps1x"] * 1000000.0 /
             resolved["kFullStrokeMilliMm"]
+        )
+    )
+    derived_steps_per_mm_x1000 = int(
+        round(
+            derived_steps_per_mm_x1000 *
+            resolved["kGearRatioX1000"] / 1000.0
         )
     )
     resolved["kDerivedStepsPerMmX1000"] = derived_steps_per_mm_x1000
@@ -395,6 +413,7 @@ def cpp_type_and_value(symbol_name, value):
 
     if symbol_name in {
         "kDriverUartBaud",
+        "kGearRatioX1000",
         "kStepsPerMmX1000",
         "kDerivedStepsPerMmX1000",
         "kStepDelayUsForMicrosteps1",

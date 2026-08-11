@@ -78,9 +78,11 @@ Use `pins.yaml` for firmware-visible pin inventory, reserved pins, and active as
 
 Assignments now use axis keys:
 
-- `axis0_enable_pin`, `axis0_step_pin`, `axis0_dir_pin`
-- `axis1_enable_pin`, `axis1_step_pin`, `axis1_dir_pin`
-- `endstop_pin`, `tmc_uart_pin`
+- `axis0_step_pin`, `axis0_dir_pin`, `axis0_uart_pin`, `axis0_driver_address`
+- `axis1_step_pin`, `axis1_dir_pin`, `axis1_uart_pin`, `axis1_driver_address`
+- `endstop_pin`
+
+When EN is not wired to an MCU pin, tie each TMC2209 EN pin to GND and use UART commands for enable/disable behavior.
 
 For exact physical wiring, use [Assembly_Instructions/connection_diagram.txt](Assembly_Instructions/connection_diagram.txt).
 
@@ -123,6 +125,7 @@ arduino:
 
 stepper_motor:
   steps_per_mm: 193.333
+  gear_ratio: 1000.0
   full_stroke_mm: 30
   full_stroke_steps_1x: 5800
   microsteps_delay:
@@ -145,7 +148,7 @@ Key meanings:
 - `homing` controls retract behavior and the double-tap verification pass.
 - `tmc2209` controls UART enablement and baud rate.
 - `arduino` controls board name, boot debug default, and EEPROM persistence enablement.
-- `stepper_motor` defines the measured steps/mm and timing table used for motion.
+- `stepper_motor` defines motor-side steps/mm, output gear ratio, and timing table used for motion.
 
 ## Runtime behavior
 
@@ -195,13 +198,16 @@ The firmware uses hardware `Serial` at `115200`.
 
 ### Normal mode
 
-Prompt: `> `
+Prompt: `<device-name> > `
 
 - `h`, `help`, `?`
 - `status`
 - `name`
 - `config`, `con`
+- `config`, `config <axis>`, `config<axis>`, `config[axis]`
+- `motor <axis>`
 - `driver`, `driver on`, `driver off`
+- `enable`, `disable`
 - `f[axis] [steps]`
 - `b[axis] [steps]`
 - `g[axis] <mm>`
@@ -211,16 +217,23 @@ Prompt: `> `
 
 Notes:
 
+- if `[axis]` is omitted on motion and driver commands, the currently selected axis is used
+- `motor <axis>` updates the selected axis in both Normal and Config modes
+- bounded moves use a dynamic timeout derived from step count and active step delay (to support high-ratio gearboxes)
 - `driver off` aborts active motion before disabling the driver
 - `reboot` uses an AVR watchdog reset and is not a literal external power cycle
 - `g[axis]`, `aperture[axis]`, `A[axis]`, and `H[axis]` are currently supported on axis `0` only
 
 ### Config mode
 
-Prompt: `config> `
+Prompt: `<device-name> config<axis> > `
 
 - `h`, `help`, `?`
 - `exit`, `q`
+- `config`, `config <axis>`, `config<axis>`, `config[axis]`
+- `motor <axis>`
+- `driver`, `driver on`, `driver off`
+- `enable`, `disable`
 - `name [new name]`
 - `debug`
 - `endstop`

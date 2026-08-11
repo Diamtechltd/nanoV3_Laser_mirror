@@ -46,13 +46,14 @@ void disableWatchdogAtStartup() {
 
 bool autoDisableAfterMove = driver_config::kAutoDisableAfterMove;
 bool debugMode = driver_config::kDebugMode;
-bool driverEnabled = false;
+bool driverEnabledByAxis[board::kAxisCount] = {};
 bool endstopEnabled = driver_config::kEndstopEnabled;
 bool motionReady = false;
 bool tmcOk = false;
 bool positionKnown = false;
 bool runtimeConfigDirty = false;
 bool savedRuntimeConfigValid = false;
+uint8_t activeTmcAxis = 0;
 
 uint16_t runCurrentMa = driver_config::kDefaultCurrentMa;
 uint16_t currentMicrosteps = driver_config::kDefaultMicrosteps;
@@ -242,15 +243,41 @@ bool motionDrivesIntoMinimumEndstop(MotionMode mode, bool logicalForward) {
   return false;
 }
 
+bool configureTmcForAxis(uint8_t axisIndex) {
+  if (!isValidAxisIndex(axisIndex)) {
+    return false;
+  }
+
+  if (!tmc.configure(board::axisTmcUartPin(axisIndex),
+                     board::axisTmcDriverAddress(axisIndex))) {
+    tmcOk = false;
+    return false;
+  }
+
+  activeTmcAxis = axisIndex;
+  tmcOk = false;
+  return true;
+}
+
 void enableDriver(uint8_t axisIndex) {
   if (!isValidAxisIndex(axisIndex)) {
     return;
   }
 
-  digitalWrite(board::axisEnablePin(axisIndex),
-               board::kEnableActiveLow ? LOW : HIGH);
-  driverEnabled = true;
-  delay(5);
+  if (!configureTmcForAxis(axisIndex)) {
+    return;
+  }
+
+  if (tmc.begin(runCurrentMa, currentMicrosteps)) {
+    driverEnabledByAxis[axisIndex] = true;
+    tmcOk = true;
+    return;
+  }
+
+  if (tmc.refreshConnection() == 0 && tmc.setEnabledState(true)) {
+    driverEnabledByAxis[axisIndex] = true;
+    tmcOk = true;
+  }
 }
 
 void enableDriver() { enableDriver(0); }
@@ -260,10 +287,15 @@ void disableDriver(uint8_t axisIndex) {
     return;
   }
 
-  digitalWrite(board::axisEnablePin(axisIndex),
-               board::kEnableActiveLow ? HIGH : LOW);
-  driverEnabled = false;
-  delay(5);
+  if (!configureTmcForAxis(axisIndex)) {
+    driverEnabledByAxis[axisIndex] = false;
+    return;
+  }
+
+  if (tmc.begin(runCurrentMa, currentMicrosteps) || tmc.refreshConnection() == 0) {
+    tmc.setEnabledState(false);
+  }
+  driverEnabledByAxis[axisIndex] = false;
 }
 
 void disableDriver() { disableDriver(0); }
@@ -733,30 +765,18 @@ Tmc2209Driver::MicrostepStatus applyMicrostepsSetting(uint16_t microsteps) {
   return status;
 }
 
-bool refreshMotionReadyFromUartProbe() {
-  if (!tmc.isEnabled()) {
-    setMotionReadyState(false, MotionReadyReason::kUartDisabled);
+bool refreshMotionReadyFromUartProbe(uint8_t axisIndex) {
+  if (!configureTmcForAxis(axisIndex)) {
+    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
     return false;
   }
 
-  if (tmc.refreshConnection() != 0) {
-    setMotionReadyState(false, MotionReadyReason::kUartProbeFailed);
+  if (!tmc.begin(runCurrentMa, currentMicrosteps)) {
+    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
     return false;
   }
 
   tmcOk = true;
-  if (!tmc.setRunCurrent(runCurrentMa)) {
-    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
-    return false;
-  }
-
-  const Tmc2209Driver::MicrostepStatus status =
-      applyMicrostepsSetting(currentMicrosteps);
-  if (status != Tmc2209Driver::MicrostepStatus::kOk) {
-    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
-    return false;
-  }
-
   setMotionReadyState(true, MotionReadyReason::kReady);
   return true;
 }
@@ -909,7 +929,7 @@ void finishMove(bool aborted, MotionAbortReason reason) {
 bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
                  uint8_t axisIndex, uint32_t requestedStepDelayUs, MotionMode mode,
                  bool allowTriggeredStart) {
-  if (!refreshMotionReadyFromUartProbe()) {
+  if (!refreshMotionReadyFromUartProbe(axisIndex)) {
     printMotionBlockedMessage();
     return false;
   }
@@ -926,6 +946,30 @@ bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
     return false;
   }
 
+  auto computeTimeoutMs = [](unsigned long steps, bool moveBounded,
+                             uint32_t delayUs) -> unsigned long {
+    if (!moveBounded || steps == 0 || delayUs == 0) {
+      return driver_config::kMaxMoveDurationMs;
+    }
+
+    // One full step pulse cycle is two delay intervals (HIGH then LOW).
+    const uint64_t estimatedDurationUs =
+        static_cast<uint64_t>(steps) * static_cast<uint64_t>(delayUs) * 2ULL;
+    // Keep a generous margin for cooperative scheduling and serial activity.
+    const uint64_t paddedDurationUs = estimatedDurationUs * 4ULL;
+    const uint64_t paddedDurationMs = (paddedDurationUs + 999ULL) / 1000ULL;
+
+    const unsigned long floorMs = driver_config::kMaxMoveDurationMs;
+    const unsigned long ceilingMs = 1800000UL;
+    if (paddedDurationMs < floorMs) {
+      return floorMs;
+    }
+    if (paddedDurationMs > ceilingMs) {
+      return ceilingMs;
+    }
+    return static_cast<unsigned long>(paddedDurationMs);
+  };
+
   motion = MotionState{};
   motion.active = true;
   motion.axisIndex = axisIndex;
@@ -935,6 +979,7 @@ bool beginMotion(bool logicalForward, unsigned long totalSteps, bool bounded,
   motion.bounded = bounded;
   motion.totalSteps = totalSteps;
   motion.startMs = millis();
+  motion.timeoutMs = computeTimeoutMs(totalSteps, bounded, requestedStepDelayUs);
   motion.nextStatusMs =
       motion.startMs + driver_config::kMotionStatusIntervalMs;
   motion.stepDelayUs = requestedStepDelayUs;
@@ -965,6 +1010,13 @@ void startMove(uint8_t axisIndex, long steps) {
                    MotionMode::kNormal, false)) {
     return;
   }
+
+  Serial.print(F("Move started: axis "));
+  Serial.print(motion.axisIndex);
+  Serial.print(F(" "));
+  Serial.print(motion.logicalForward ? F("forward ") : F("backward "));
+  Serial.print(motion.totalSteps);
+  Serial.println(F(" steps."));
 
   if (shouldPrintDebug()) {
     Serial.println();
@@ -1247,8 +1299,7 @@ void serviceMotion() {
   }
 
   const unsigned long nowMs = millis();
-  if (hasReachedMillis(nowMs,
-                       motion.startMs + driver_config::kMaxMoveDurationMs)) {
+  if (hasReachedMillis(nowMs, motion.startMs + motion.timeoutMs)) {
     finishMove(true, MotionAbortReason::kTimeout);
     return;
   }
@@ -1309,6 +1360,60 @@ void serviceMotion() {
 }
 
 void printStatus() {
+#if defined(ARDUINO_ARCH_AVR)
+  Serial.println();
+  Serial.println(F("Status"));
+  printDivider();
+
+  Serial.print(F("  ready: "));
+  Serial.println(motionReady ? F("YES") : F("NO"));
+
+  Serial.print(F("  lock: "));
+  Serial.println(motionReadyReasonText(motionReadyReason));
+
+  Serial.print(F("  motion: "));
+  Serial.println(motion.active ? F("ACTIVE") : F("IDLE"));
+
+  Serial.print(F("  endstop: "));
+  Serial.println(isEndstopTriggered() ? F("TRIG") : F("IDLE"));
+
+  Serial.print(F("  endstop en: "));
+  Serial.println(endstopEnabled ? F("ON") : F("OFF"));
+
+  Serial.print(F("  pos known: "));
+  Serial.println(positionKnown ? F("YES") : F("NO"));
+
+  Serial.print(F("  pos mm: "));
+  if (positionKnown) {
+    printMilliMm(currentPositionMilliMm);
+    Serial.println();
+  } else {
+    Serial.println(F("unknown"));
+  }
+
+  Serial.print(F("  cfg mA: "));
+  Serial.println(runCurrentMa);
+
+  Serial.print(F("  microsteps: "));
+  Serial.println(currentMicrosteps);
+
+  Serial.print(F("  step us: "));
+  Serial.println(stepDelayUs);
+
+  Serial.print(F("  auto disable: "));
+  Serial.println(autoDisableAfterMove ? F("ON") : F("OFF"));
+
+  Serial.print(F("  cfg dirty: "));
+  Serial.println(runtimeConfigDirty ? F("YES") : F("NO"));
+
+  Serial.print(F("  TMC conn: "));
+  Serial.println(tmcOk ? F("YES") : F("NO"));
+
+  printDivider();
+  Serial.println();
+  return;
+#endif
+
   Serial.println();
   Serial.println(F("Aperture driver status"));
   printDivider();
@@ -1518,13 +1623,12 @@ void loadRuntimeConfigAtBoot() {
 
 void initPins() {
   for (uint8_t axis = 0; axis < board::kAxisCount; ++axis) {
-    pinMode(board::axisEnablePin(axis), OUTPUT);
     pinMode(board::axisStepPin(axis), OUTPUT);
     pinMode(board::axisDirPin(axis), OUTPUT);
 
     digitalWrite(board::axisStepPin(axis), LOW);
     digitalWrite(board::axisDirPin(axis), LOW);
-    disableDriver(axis);
+    driverEnabledByAxis[axis] = false;
   }
   pinMode(board::kEndstopPin, INPUT_PULLUP);
 }
@@ -1536,30 +1640,53 @@ void initTmcLayer() {
     return;
   }
 
-  tmcOk = tmc.begin(runCurrentMa, currentMicrosteps);
+  bool anyAxisReady = false;
+  bool allAxesReady = true;
+  for (uint8_t axis = 0; axis < board::kAxisCount; ++axis) {
+    Serial.print(F("axis "));
+    Serial.print(axis);
+    Serial.print(F(" uart pin="));
+    Serial.print(board::axisTmcUartPin(axis));
+    Serial.print(F(" addr="));
+    Serial.println(board::axisTmcDriverAddress(axis));
 
-  Serial.print(F("test_connection() = "));
-  Serial.println(tmc.testConnection());
-
-  if (!tmcOk) {
-    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
-    if (tmc.isConnected()) {
-      Serial.print(F("ERROR: TMC setup failed: "));
-      Serial.println(microstepStatusText(tmc.lastMicrostepStatus()));
-    } else {
-      Serial.println(F("ERROR: TMC UART not detected."));
-      Serial.println(F("Check PDN_UART wiring/address."));
+    if (!configureTmcForAxis(axis)) {
+      allAxesReady = false;
+      continue;
     }
 
+    const bool axisReady = tmc.begin(runCurrentMa, currentMicrosteps);
+    Serial.print(F("axis "));
+    Serial.print(axis);
+    Serial.print(F(" test_connection() = "));
+    Serial.println(tmc.testConnection());
+
+    if (!axisReady) {
+      Serial.print(F("axis "));
+      Serial.print(axis);
+      Serial.println(F(" is offline or not responding."));
+      allAxesReady = false;
+      continue;
+    }
+
+    driverEnabledByAxis[axis] = tmc.enabledState();
+    const uint16_t realMicrosteps = tmc.getRealMicrosteps();
+    if (realMicrosteps != 0) {
+      currentMicrosteps = realMicrosteps;
+    }
+    anyAxisReady = true;
+  }
+
+  refreshStepDelayUsFromCurrentSettings();
+  if (!anyAxisReady) {
+    setMotionReadyState(false, MotionReadyReason::kUartSetupFailed);
+    Serial.println(F("ERROR: TMC UART not detected."));
+    Serial.println(F("Check PDN_UART wiring/address."));
+    Serial.println(F("If EN is not MCU-controlled, tie EN to GND for each driver."));
     Serial.println(F("Motion locked until UART works."));
     return;
   }
 
-  const uint16_t realMicrosteps = tmc.getRealMicrosteps();
-  if (realMicrosteps != 0) {
-    currentMicrosteps = realMicrosteps;
-  }
-  refreshStepDelayUsFromCurrentSettings();
   setMotionReadyState(true, MotionReadyReason::kReady);
   Serial.println(F("OK: TMC UART ready. Motion enabled."));
 }

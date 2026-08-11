@@ -12,14 +12,16 @@ GENERATED_HEADER_PATH = BUILD_DIR / "GeneratedBoardPins.h"
 
 ASSIGNMENT_TO_SYMBOL = {
     "endstop_pin": "kEndstopPin",
-    "tmc_uart_pin": "kTmcUartPin",
 }
 
-AXIS_KEY_PATTERN = re.compile(r"^axis(\d+)_(enable_pin|step_pin|dir_pin)$")
+AXIS_KEY_PATTERN = re.compile(
+    r"^axis(\d+)_(step_pin|dir_pin|uart_pin|driver_address)$"
+)
 AXIS_ROLE_SUFFIX_TO_SYMBOL = {
-    "enable_pin": "kAxisEnablePins",
     "step_pin": "kAxisStepPins",
     "dir_pin": "kAxisDirPins",
+    "uart_pin": "kAxisTmcUartPins",
+    "driver_address": "kAxisTmcDriverAddresses",
 }
 
 
@@ -195,20 +197,10 @@ def resolve_assignments(data, board_pins):
         role_suffix = match.group(2)
         axis_role_map.setdefault(axis_index, {})[role_suffix] = value
 
-    # Backward compatibility: map legacy single-axis keys to axis0_* when present.
-    if not axis_role_map and all(
-        legacy_key in assignments for legacy_key in ("enable_pin", "step_pin", "dir_pin")
-    ):
-        axis_role_map[0] = {
-            "enable_pin": assignments["enable_pin"],
-            "step_pin": assignments["step_pin"],
-            "dir_pin": assignments["dir_pin"],
-        }
-
     if not axis_role_map:
         fail(
-            "pins.yaml assignments must define axis pin triplets using "
-            "axis0_enable_pin/axis0_step_pin/axis0_dir_pin"
+            "pins.yaml assignments must define per-axis pins using "
+            "axis0_step_pin/axis0_dir_pin/axis0_uart_pin/axis0_driver_address"
         )
 
     axis_indices = sorted(axis_role_map.keys())
@@ -219,14 +211,14 @@ def resolve_assignments(data, board_pins):
     axis_assignments = []
     for axis_index in axis_indices:
         role_values = axis_role_map[axis_index]
-        for required_role in ("enable_pin", "step_pin", "dir_pin"):
+        for required_role in ("step_pin", "dir_pin", "uart_pin", "driver_address"):
             if required_role not in role_values:
                 fail(
                     f"Missing assignments.axis{axis_index}_{required_role} in pins.yaml"
                 )
 
         axis_meta = {}
-        for role_suffix in ("enable_pin", "step_pin", "dir_pin"):
+        for role_suffix in ("step_pin", "dir_pin", "uart_pin"):
             label = role_values[role_suffix]
             if not isinstance(label, str):
                 fail(
@@ -250,17 +242,31 @@ def resolve_assignments(data, board_pins):
                 "arduino_number": board_pins[label]["arduino_number"],
             }
 
+        driver_address = role_values["driver_address"]
+        if not isinstance(driver_address, int):
+            fail(
+                f"assignments.axis{axis_index}_driver_address must be an integer"
+            )
+        if driver_address < 0 or driver_address > 3:
+            fail(
+                f"assignments.axis{axis_index}_driver_address must be between 0 and 3"
+            )
+        axis_meta["driver_address"] = driver_address
+
         axis_assignments.append(axis_meta)
 
     resolved["kAxisCount"] = len(axis_assignments)
-    resolved["kAxisEnablePins"] = [
-        axis["enable_pin"]["arduino_number"] for axis in axis_assignments
-    ]
     resolved["kAxisStepPins"] = [
         axis["step_pin"]["arduino_number"] for axis in axis_assignments
     ]
     resolved["kAxisDirPins"] = [
         axis["dir_pin"]["arduino_number"] for axis in axis_assignments
+    ]
+    resolved["kAxisTmcUartPins"] = [
+        axis["uart_pin"]["arduino_number"] for axis in axis_assignments
+    ]
+    resolved["kAxisTmcDriverAddresses"] = [
+        axis["driver_address"] for axis in axis_assignments
     ]
 
     return resolved
@@ -286,11 +292,12 @@ def write_header(resolved_assignments):
             f"constexpr uint8_t {symbol_name}[kAxisCount] = {{{values}}};"
         )
 
-    format_array("kAxisEnablePins")
     format_array("kAxisStepPins")
     format_array("kAxisDirPins")
+    format_array("kAxisTmcUartPins")
+    format_array("kAxisTmcDriverAddresses")
 
-    for scalar_symbol in ("kEndstopPin", "kTmcUartPin"):
+    for scalar_symbol in ("kEndstopPin",):
         meta = resolved_assignments[scalar_symbol]
         lines.append(
             f"constexpr uint8_t {scalar_symbol} = {meta['arduino_number']};"

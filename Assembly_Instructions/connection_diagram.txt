@@ -1,17 +1,20 @@
 Nano SuperMini default profile (active_board: nano_supermini)
 
 Axis 0:
-Arduino D4 -> Driver EN
 Arduino D5 -> Driver STEP
 Arduino D6 -> Driver DIR
+Arduino D7 -> 1k resistor -> Driver0 PDN_UART
+Driver0 UART address -> 0 (MS1/MS2 strap per module wiring)
 
 Axis 1:
-Arduino D8 -> Driver EN
-Arduino D9 -> Driver STEP
-Arduino D10 -> Driver DIR
+Arduino A3 -> Driver STEP
+Arduino A4 -> Driver DIR
+Arduino A1 -> 1k resistor -> Driver1 PDN_UART
+Driver1 UART address -> 2 (MS1/MS2 strap per module wiring)
 
-Shared control:
-Arduino D7 -> 1k resistor -> TMC2209 PDN_UART
+Enable control:
+Driver EN is controlled via TMC2209 UART registers (no MCU EN pin required).
+Tie each driver EN pin to GND so the driver logic stays active for UART access.
 
 Endstop wiring:
 Endstop NC -> Arduino D2
@@ -24,9 +27,7 @@ Arduino GND -> TMC2209 GND
 Motor supply VM -> TMC2209 VM
 Motor supply GND -> TMC2209 GND
 
-TMC2209 MS1 -> GND
-TMC2209 MS2 -> GND
-MS1/MS2 both GND selects UART address 0 (matches firmware).
+Set each TMC2209 MS1/MS2 strapping to match its configured UART address.
 
 Motor coil A -> TMC A1 / A2
 Motor coil B -> TMC B1 / B2
@@ -34,15 +35,15 @@ Motor coil B -> TMC B1 / B2
 ESP32-DevKitC V4 profile (active_board: esp32_devkitc_v4)
 
 Axis 0:
-GPIO25 -> Driver EN
 GPIO26 -> Driver STEP
 GPIO27 -> Driver DIR
+GPIO17 -> 1k resistor -> Driver0 PDN_UART
+Driver0 UART address -> 0
 
 Axis 1:
-GPIO18 -> Driver EN
 GPIO19 -> Driver STEP
 GPIO21 -> Driver DIR
+GPIO16 -> 1k resistor -> Driver1 PDN_UART
+Driver1 UART address -> 2
 
-Shared control:
-GPIO17 -> 1k resistor -> TMC2209 PDN_UART
 GPIO33 -> Endstop input (wire NC/COM equivalent to Nano profile using 3.3V logic)

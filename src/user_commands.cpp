@@ -15,6 +15,7 @@ constexpr size_t kCommandBufferSize = 48;
 char commandBuffer[kCommandBufferSize] = {};
 size_t commandLength = 0;
 bool lastTerminatorWasCarriageReturn = false;
+uint8_t selectedAxis = 0;
 
 void trimInPlace(char* text) {
   if (text == nullptr) {
@@ -88,6 +89,28 @@ bool parseAxisIndexedCommand(const char* token, char* baseCommandOut,
 
   const char* openBracket = strchr(token, '[');
   if (openBracket == nullptr) {
+    const char cmd = token[0];
+    if ((cmd == 'f' || cmd == 'b' || cmd == 'g' || cmd == 'H' || cmd == 'A') &&
+        token[1] >= '0' && token[1] <= '9') {
+      uint16_t axisValue = 0;
+      for (const char* cursor = token + 1; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') {
+          return false;
+        }
+        axisValue = static_cast<uint16_t>(axisValue * 10U +
+                                          static_cast<uint16_t>(*cursor - '0'));
+        if (axisValue > 255U) {
+          return false;
+        }
+      }
+
+      baseCommandOut[0] = cmd;
+      baseCommandOut[1] = '\0';
+      *axisOut = static_cast<uint8_t>(axisValue);
+      *hasAxisOut = true;
+      return true;
+    }
+
     strncpy(baseCommandOut, token, baseCommandOutSize - 1);
     baseCommandOut[baseCommandOutSize - 1] = '\0';
     return true;
@@ -136,6 +159,135 @@ long parseLongValue(const char* text) {
   return strtol(text, &end, 10);
 }
 
+bool parseAxisSuffix(const char* text, const char* prefix, uint8_t* axisOut) {
+  if (text == nullptr || prefix == nullptr || axisOut == nullptr) {
+    return false;
+  }
+
+  const size_t prefixLength = strlen(prefix);
+  if (strncmp(text, prefix, prefixLength) != 0) {
+    return false;
+  }
+
+  const char* suffix = text + prefixLength;
+  if (*suffix == '\0') {
+    return false;
+  }
+
+  uint16_t axisValue = 0;
+  for (const char* cursor = suffix; *cursor != '\0'; ++cursor) {
+    if (*cursor < '0' || *cursor > '9') {
+      return false;
+    }
+
+    axisValue = static_cast<uint16_t>(axisValue * 10U +
+                                      static_cast<uint16_t>(*cursor - '0'));
+    if (axisValue > 255U) {
+      return false;
+    }
+  }
+
+  *axisOut = static_cast<uint8_t>(axisValue);
+  return true;
+}
+
+bool parseAxisBracketSuffix(const char* text, const char* prefix,
+                            uint8_t* axisOut) {
+  if (text == nullptr || prefix == nullptr || axisOut == nullptr) {
+    return false;
+  }
+
+  const size_t prefixLength = strlen(prefix);
+  if (strncmp(text, prefix, prefixLength) != 0) {
+    return false;
+  }
+
+  const char* suffix = text + prefixLength;
+  if (suffix[0] != '[') {
+    return false;
+  }
+
+  const char* closeBracket = strchr(suffix + 1, ']');
+  if (closeBracket == nullptr || closeBracket[1] != '\0' || closeBracket == suffix + 1) {
+    return false;
+  }
+
+  uint16_t axisValue = 0;
+  for (const char* cursor = suffix + 1; cursor < closeBracket; ++cursor) {
+    if (*cursor < '0' || *cursor > '9') {
+      return false;
+    }
+
+    axisValue = static_cast<uint16_t>(axisValue * 10U +
+                                      static_cast<uint16_t>(*cursor - '0'));
+    if (axisValue > 255U) {
+      return false;
+    }
+  }
+
+  *axisOut = static_cast<uint8_t>(axisValue);
+  return true;
+}
+
+bool resolveAxisSelection(uint8_t axisIndex, bool printResult) {
+  if (axisIndex >= driver_config::kAxisCount) {
+    Serial.print(F("ERROR: axis out of range. Valid axis: 0.."));
+    Serial.println(driver_config::kAxisCount - 1);
+    return false;
+  }
+
+  selectedAxis = axisIndex;
+  if (printResult) {
+    Serial.print(F("Selected axis: "));
+    Serial.println(selectedAxis);
+  }
+  return true;
+}
+
+bool tryHandleAxisSelectionCommand(const char* command, const char* arg,
+                                   bool printResult) {
+  if (command == nullptr) {
+    return false;
+  }
+
+  uint8_t axisIndex = 0;
+  if (parseAxisSuffix(command, "config", &axisIndex)) {
+    return resolveAxisSelection(axisIndex, printResult);
+  }
+
+  if (parseAxisBracketSuffix(command, "config", &axisIndex)) {
+    return resolveAxisSelection(axisIndex, printResult);
+  }
+
+  if (strcmp(command, "config") == 0 && arg != nullptr && arg[0] != '\0') {
+    const long axisValue = parseLongValue(arg);
+    if (axisValue < 0 || axisValue > 255) {
+      Serial.println(F("ERROR: config axis must be 0..255."));
+      return true;
+    }
+
+    return resolveAxisSelection(static_cast<uint8_t>(axisValue), printResult);
+  }
+
+  if (strcmp(command, "motor") == 0) {
+    if (arg == nullptr || arg[0] == '\0') {
+      Serial.print(F("Selected axis: "));
+      Serial.println(selectedAxis);
+      return true;
+    }
+
+    const long axisValue = parseLongValue(arg);
+    if (axisValue < 0 || axisValue > 255) {
+      Serial.println(F("ERROR: motor axis must be 0..255."));
+      return true;
+    }
+
+    return resolveAxisSelection(static_cast<uint8_t>(axisValue), printResult);
+  }
+
+  return false;
+}
+
 void printStepsPerSecondApprox() {
   Serial.println((1000000UL + stepDelayUs) / (2UL * stepDelayUs));
 }
@@ -143,13 +295,20 @@ void printStepsPerSecondApprox() {
 }  // namespace
 
 void printPrompt() {
+  Serial.print(arduinoName);
+  Serial.print(F(" "));
+
   switch (cliMode) {
     case CliMode::Normal:
-      Serial.print(F("> "));
+      Serial.print(F("axis"));
+      Serial.print(selectedAxis);
+      Serial.print(F(" > "));
       break;
 
     case CliMode::Config:
-      Serial.print(F("config> "));
+      Serial.print(F("config"));
+      Serial.print(selectedAxis);
+      Serial.print(F(" > "));
       break;
   }
 }
@@ -160,39 +319,21 @@ void enterNormalMode() { cliMode = CliMode::Normal; }
 
 void printNormalHelp() {
   Serial.println();
-  Serial.println(F("Cmds:"));
-  Serial.println(F("  help         show help"));
-  Serial.println(F("  name         print name"));
-  Serial.println(F("  config       config mode"));
-  Serial.println(F("  status       display status"));
-  Serial.println(F("  driver [on|off] drv on / off"));
-  Serial.println(F("  f[axis] [steps] fwd steps (ex: f[0] 4000)"));
-  Serial.println(F("  b[axis] [steps] back steps (ex: b[1] 2000)"));
-  Serial.println(F("  g[axis] [mm] goto pos mm (axis 0)"));
-  Serial.println(F("  aperture/A[axis] [mm] goto ap mm (axis 0)"));
-  Serial.println(F("  H[axis] [steps] home (axis 0)"));
-  Serial.println(F("  reboot       watchdog rst"));
+  Serial.println(F("Cmds: help name config status"));
+  Serial.println(F("Move: f[n] b[n] g[0] aperture[0]/A[0] H[0]"));
+  Serial.println(F("Axis: config0/config1..., motor <n>"));
+  Serial.println(F("Other: driver [on|off], enable, disable, reboot"));
   Serial.println();
 }
 
 void printConfigHelp() {
   Serial.println();
-  Serial.println(F("Config:"));
-  Serial.println(F("  help          show help"));
-  Serial.println(F("  exit          normal mode"));
-  Serial.println(F("  iris [m/x] [v]iris min/max mm"));
-  Serial.println(F("  name [string] rename device"));
-  Serial.println(F("  i [mA]        set mA RMS"));
-  Serial.println(F("  debug         toggle debug"));
-  Serial.println(F("  endstop       toggle endstop"));
-  Serial.println(F("  a             toggle driver auto-off"));
-  Serial.println(F("  u [step]      microsteps 1/2/4/...256"));
-  Serial.println(F("  v [μs]        step delay in μs"));
-  Serial.println(F("  write         save cfg"));
-  Serial.println(F("  reload        load saved cfg"));
-  Serial.println(F("  reset         load default cfg"));
-  Serial.println(F("  read          show saved cfg"));
-  Serial.println(F("  defaults      show def cfg"));
+  Serial.println(F("Config: help exit write reload reset read defaults"));
+  Serial.println(F("Axis: config0/config1..., motor <n>"));
+  Serial.println(F("Run: driver [on|off], enable, disable"));
+  Serial.println(F("Set: i <mA>, u <uStep>, v <us>, iris min|max <mm>"));
+  Serial.println(F("Set: name <text>"));
+  Serial.println(F("Toggle: debug endstop a"));
   Serial.println();
 }
 
@@ -233,7 +374,7 @@ bool ensurePersistenceCommandIdle(const __FlashStringHelper* action) {
 }
 
 void printConfigOnlyHint() {
-  Serial.println(F("This command is available only in 'Config' terminal."));
+  Serial.println(F("Config mode only."));
 }
 
 void showSavedRuntimeConfig() {
@@ -402,19 +543,19 @@ void handleRunCurrentCommand(const char* arg) {
   updateRuntimeConfigDirtyFromBaseline();
 }
 
-void handleDriverStateChange(bool enable) {
+void handleDriverStateChange(bool enable, uint8_t axisIndex) {
   if (enable) {
     if (motion.active) {
       Serial.println(F("Driver already enabled for active motion."));
       return;
     }
 
-    if (driverEnabled) {
+    if (driverEnabledByAxis[axisIndex]) {
       Serial.println(F("Driver already enabled."));
       return;
     }
 
-    enableDriver();
+    enableDriver(axisIndex);
     Serial.println(F("Driver enabled."));
     return;
   }
@@ -424,28 +565,28 @@ void handleDriverStateChange(bool enable) {
     return;
   }
 
-  if (!driverEnabled) {
+  if (!driverEnabledByAxis[axisIndex]) {
     Serial.println(F("Driver already disabled."));
     return;
   }
 
-  disableDriver();
+  disableDriver(axisIndex);
   Serial.println(F("Driver disabled."));
 }
 
-void handleDriverCommand(const char* arg) {
+void handleDriverCommand(const char* arg, uint8_t axisIndex) {
   if (arg == nullptr || arg[0] == '\0') {
-    handleDriverStateChange(!driverEnabled);
+    handleDriverStateChange(!driverEnabledByAxis[axisIndex], axisIndex);
     return;
   }
 
   if (strcmp(arg, "on") == 0) {
-    handleDriverStateChange(true);
+    handleDriverStateChange(true, axisIndex);
     return;
   }
 
   if (strcmp(arg, "off") == 0) {
-    handleDriverStateChange(false);
+    handleDriverStateChange(false, axisIndex);
     return;
   }
 
@@ -455,6 +596,17 @@ void handleDriverCommand(const char* arg) {
 void handleNormalModeCommand(const char* line) {
   if (isHelpCommand(line)) {
     printHelp();
+    return;
+  }
+
+  char command[16] = {};
+  const char* arg = "";
+  splitCommandArg(line, command, sizeof(command), &arg);
+
+  if (tryHandleAxisSelectionCommand(command, arg, true)) {
+    if (strncmp(command, "config", 6) == 0) {
+      enterConfigMode();
+    }
     return;
   }
 
@@ -503,10 +655,6 @@ void handleNormalModeCommand(const char* line) {
     return;
   }
 
-  char command[16] = {};
-  const char* arg = "";
-  splitCommandArg(line, command, sizeof(command), &arg);
-
   char baseCommand[16] = {};
   uint8_t axisIndex = 0;
   bool hasAxisIndex = false;
@@ -522,7 +670,7 @@ void handleNormalModeCommand(const char* line) {
     return;
   }
 
-  const uint8_t targetAxis = hasAxisIndex ? axisIndex : 0;
+  const uint8_t targetAxis = hasAxisIndex ? axisIndex : selectedAxis;
 
   if (strcmp(baseCommand, "iris") == 0) {
     printConfigOnlyHint();
@@ -546,7 +694,15 @@ void handleNormalModeCommand(const char* line) {
     return;
   }
   if (strcmp(baseCommand, "driver") == 0) {
-    handleDriverCommand(arg);
+    handleDriverCommand(arg, targetAxis);
+    return;
+  }
+  if (strcmp(baseCommand, "enable") == 0) {
+    handleDriverStateChange(true, targetAxis);
+    return;
+  }
+  if (strcmp(baseCommand, "disable") == 0) {
+    handleDriverStateChange(false, targetAxis);
     return;
   }
   if (strcmp(baseCommand, "name") == 0) {
@@ -653,8 +809,25 @@ void handleConfigModeCommand(const char* line) {
   char command[16] = {};
   const char* arg = "";
   splitCommandArg(line, command, sizeof(command), &arg);
+
+  if (tryHandleAxisSelectionCommand(command, arg, true)) {
+    return;
+  }
+
   if (strcmp(command, "iris") == 0) {
     handleIrisCommand(arg);
+    return;
+  }
+  if (strcmp(command, "driver") == 0) {
+    handleDriverCommand(arg, selectedAxis);
+    return;
+  }
+  if (strcmp(command, "enable") == 0) {
+    handleDriverStateChange(true, selectedAxis);
+    return;
+  }
+  if (strcmp(command, "disable") == 0) {
+    handleDriverStateChange(false, selectedAxis);
     return;
   }
   if (strcmp(command, "endstop") == 0) {
