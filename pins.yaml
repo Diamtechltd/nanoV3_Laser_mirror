@@ -21,7 +21,7 @@ boards:
         arduino_number: 2
         reserved: true
         assignable_roles: [endstop_pin]
-        notes: Digital pin 2; reserved for minimum endstop input.
+        notes: Digital pin 2; interrupt-capable, kept reserved for endstop use. Currently unassigned (endstop moved to D5).
       D3:
         arduino_number: 3
         reserved: false
@@ -109,16 +109,19 @@ boards:
         notes: Ground pins.
 
     assignments:
-    
-      axis0_step_pin: D5
-      axis0_dir_pin: D6
+
+      axis0_step_pin: D4
+      axis0_dir_pin: D3
       axis0_uart_pin: D7
       axis0_driver_address: 0
+      axis0_en_pin: D10
+      axis0_ms1_pin: D9
+      axis0_ms2_pin: D8
       axis1_step_pin: A3
       axis1_dir_pin: A4
       axis1_uart_pin: A1
       axis1_driver_address: 1
-      endstop_pin: D2
+      endstop_pin: D5
 
   esp32_devkitc_v4:
     board_pins:

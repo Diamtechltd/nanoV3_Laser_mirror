@@ -19,6 +19,16 @@ constexpr uint8_t axisTmcUartPin(uint8_t axis) {
 constexpr uint8_t axisTmcDriverAddress(uint8_t axis) {
 	return generated_board_pins::kAxisTmcDriverAddresses[axis];
 }
+constexpr uint8_t kNoPin = generated_board_pins::kNoPin;
+constexpr uint8_t axisEnablePin(uint8_t axis) {
+	return generated_board_pins::kAxisEnablePins[axis];
+}
+constexpr uint8_t axisMs1Pin(uint8_t axis) {
+	return generated_board_pins::kAxisMs1Pins[axis];
+}
+constexpr uint8_t axisMs2Pin(uint8_t axis) {
+	return generated_board_pins::kAxisMs2Pins[axis];
+}
 
 // Backward-compatible aliases for axis 0.
 constexpr uint8_t kStepPin = generated_board_pins::kAxisStepPins[0];

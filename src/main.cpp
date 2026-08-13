@@ -271,12 +271,18 @@ void enableDriver(uint8_t axisIndex) {
   if (tmc.begin(runCurrentMa, currentMicrosteps)) {
     driverEnabledByAxis[axisIndex] = true;
     tmcOk = true;
+    if (board::axisEnablePin(axisIndex) != board::kNoPin) {
+      digitalWrite(board::axisEnablePin(axisIndex), LOW);
+    }
     return;
   }
 
   if (tmc.refreshConnection() == 0 && tmc.setEnabledState(true)) {
     driverEnabledByAxis[axisIndex] = true;
     tmcOk = true;
+    if (board::axisEnablePin(axisIndex) != board::kNoPin) {
+      digitalWrite(board::axisEnablePin(axisIndex), LOW);
+    }
   }
 }
 
@@ -285,6 +291,10 @@ void enableDriver() { enableDriver(0); }
 void disableDriver(uint8_t axisIndex) {
   if (!isValidAxisIndex(axisIndex)) {
     return;
+  }
+
+  if (board::axisEnablePin(axisIndex) != board::kNoPin) {
+    digitalWrite(board::axisEnablePin(axisIndex), HIGH);
   }
 
   if (!configureTmcForAxis(axisIndex)) {
@@ -1629,6 +1639,22 @@ void initPins() {
     digitalWrite(board::axisStepPin(axis), LOW);
     digitalWrite(board::axisDirPin(axis), LOW);
     driverEnabledByAxis[axis] = false;
+
+    // EN is active-low: HIGH here matches driverEnabledByAxis[axis] == false.
+    if (board::axisEnablePin(axis) != board::kNoPin) {
+      pinMode(board::axisEnablePin(axis), OUTPUT);
+      digitalWrite(board::axisEnablePin(axis), HIGH);
+    }
+
+    // MS1/MS2 fix the driver's UART node address; held low once at boot.
+    if (board::axisMs1Pin(axis) != board::kNoPin) {
+      pinMode(board::axisMs1Pin(axis), OUTPUT);
+      digitalWrite(board::axisMs1Pin(axis), LOW);
+    }
+    if (board::axisMs2Pin(axis) != board::kNoPin) {
+      pinMode(board::axisMs2Pin(axis), OUTPUT);
+      digitalWrite(board::axisMs2Pin(axis), LOW);
+    }
   }
   pinMode(board::kEndstopPin, INPUT_PULLUP);
 }
