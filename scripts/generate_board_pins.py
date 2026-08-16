@@ -15,14 +15,21 @@ ASSIGNMENT_TO_SYMBOL = {
 }
 
 AXIS_KEY_PATTERN = re.compile(
-    r"^axis(\d+)_(step_pin|dir_pin|uart_pin|driver_address)$"
+    r"^axis(\d+)_(step_pin|dir_pin|uart_pin|driver_address|en_pin|ms1_pin|ms2_pin)$"
 )
 AXIS_ROLE_SUFFIX_TO_SYMBOL = {
     "step_pin": "kAxisStepPins",
     "dir_pin": "kAxisDirPins",
     "uart_pin": "kAxisTmcUartPins",
     "driver_address": "kAxisTmcDriverAddresses",
+    "en_pin": "kAxisEnablePins",
+    "ms1_pin": "kAxisMs1Pins",
+    "ms2_pin": "kAxisMs2Pins",
 }
+AXIS_REQUIRED_ROLES = ("step_pin", "dir_pin", "uart_pin", "driver_address")
+AXIS_OPTIONAL_PIN_ROLES = ("en_pin", "ms1_pin", "ms2_pin")
+# Sentinel for an optional per-axis pin that isn't wired on a given axis.
+kNoPin = 255
 
 
 def parse_scalar(value):
@@ -211,7 +218,7 @@ def resolve_assignments(data, board_pins):
     axis_assignments = []
     for axis_index in axis_indices:
         role_values = axis_role_map[axis_index]
-        for required_role in ("step_pin", "dir_pin", "uart_pin", "driver_address"):
+        for required_role in AXIS_REQUIRED_ROLES:
             if required_role not in role_values:
                 fail(
                     f"Missing assignments.axis{axis_index}_{required_role} in pins.yaml"
@@ -253,6 +260,34 @@ def resolve_assignments(data, board_pins):
             )
         axis_meta["driver_address"] = driver_address
 
+        for role_suffix in AXIS_OPTIONAL_PIN_ROLES:
+            if role_suffix not in role_values:
+                axis_meta[role_suffix] = None
+                continue
+
+            label = role_values[role_suffix]
+            if not isinstance(label, str):
+                fail(
+                    f"assignments.axis{axis_index}_{role_suffix} must be a pin label"
+                )
+            if label not in board_pins:
+                fail(
+                    f"assignments.axis{axis_index}_{role_suffix} references unknown pin {label}"
+                )
+            if board_pins[label]["reserved"]:
+                fail(f"assignments.axis{axis_index}_{role_suffix} uses reserved pin {label}")
+            if label in used_labels:
+                fail(
+                    f"assignments.axis{axis_index}_{role_suffix} duplicates {label}, already used by "
+                    f"{used_labels[label]}"
+                )
+
+            used_labels[label] = f"axis{axis_index}_{role_suffix}"
+            axis_meta[role_suffix] = {
+                "label": label,
+                "arduino_number": board_pins[label]["arduino_number"],
+            }
+
         axis_assignments.append(axis_meta)
 
     resolved["kAxisCount"] = len(axis_assignments)
@@ -268,6 +303,12 @@ def resolve_assignments(data, board_pins):
     resolved["kAxisTmcDriverAddresses"] = [
         axis["driver_address"] for axis in axis_assignments
     ]
+    for role_suffix in AXIS_OPTIONAL_PIN_ROLES:
+        symbol_name = AXIS_ROLE_SUFFIX_TO_SYMBOL[role_suffix]
+        resolved[symbol_name] = [
+            axis[role_suffix]["arduino_number"] if axis[role_suffix] is not None else kNoPin
+            for axis in axis_assignments
+        ]
 
     return resolved
 
@@ -285,6 +326,7 @@ def write_header(resolved_assignments):
 
     axis_count = resolved_assignments["kAxisCount"]
     lines.append(f"constexpr uint8_t kAxisCount = {axis_count};")
+    lines.append(f"constexpr uint8_t kNoPin = {kNoPin};")
 
     def format_array(symbol_name):
         values = ", ".join(str(item) for item in resolved_assignments[symbol_name])
@@ -296,6 +338,9 @@ def write_header(resolved_assignments):
     format_array("kAxisDirPins")
     format_array("kAxisTmcUartPins")
     format_array("kAxisTmcDriverAddresses")
+    format_array("kAxisEnablePins")
+    format_array("kAxisMs1Pins")
+    format_array("kAxisMs2Pins")
 
     for scalar_symbol in ("kEndstopPin",):
         meta = resolved_assignments[scalar_symbol]
