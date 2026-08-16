@@ -1732,6 +1732,9 @@ void setup() {
   delay(500);
 
   app::initPins();
+  // Let TMC2209 power settle before probing UART; matters when driver power
+  // comes from a separate supply that isn't synchronized with Nano boot.
+  delay(1000);
   const bool bootZeroedFromEndstop = app::zeroPositionFromBootEndstop();
   app::loadRuntimeConfigAtBoot();
 
